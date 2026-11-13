@@ -17,23 +17,45 @@
 
 ## 三十秒装好
 
-需要 Windows 10 1809+ 与 [Visual Studio 2022](https://visualstudio.microsoft.com/)（勾选「使用 C++ 的桌面开发」）。
+**A. 直接用**（不需要编译环境）
+
+下载 [Releases](../../releases) 里的 `DynamicIsland-Win-*.zip` → 解压 → 双击 `install.cmd`。
+装到 `%LOCALAPPDATA%\DynamicIsland-Win`，并设置开机自启。
+
+> **首次运行会被 Windows 拦一下，这是正常的。** 本程序没有代码签名证书，会弹
+> 「Windows 已保护你的电脑 / 发布者：未知发布者」。点【更多信息】→【仍要运行】，
+> 只会问这一次。不放心的话，用下面的 B 自己编译。
+>
+> 卸载：双击 `uninstall.cmd`（配置默认保留）。
+
+**B. 从源码构建**（需要 Windows 10 1809+ 与 VS2022，勾选「使用 C++ 的桌面开发」）
 
 ```powershell
 git clone <this-repo> && cd DynamicIsland-Win
 
-# 编译 + 跑测试（510 项断言，约 40 秒）
+# 编译 + 跑测试（559 项断言，约 40 秒）
 powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 # 装到 %LOCALAPPDATA% 并启动
 powershell -ExecutionPolicy Bypass -File tools\install.ps1
 ```
 
-想开机自启：给 install.ps1 加 `-Autostart`。
-不想用了：`install.ps1 -Uninstall`（配置默认保留，重装还在）。
+想开机自启给 `-Autostart`；不想用了 `-Uninstall`（配置默认保留，重装还在）。
+想打成可分发 zip：`tools\package.ps1`，产物在 `build\dist\`。
 
 > 不需要管理员权限，不注入系统进程，不装驱动，不写 Program Files。
 > 构建脚本从 `vswhere` 和注册表推导工具链路径 —— 你的 VS/SDK 装在 D 盘也能编。
+
+## 别的程序也能往上推
+
+不用弹自己的通知：任何程序都能往命名管道写一行 JSON，让事件上岛。
+
+```powershell
+tools\send-activity.ps1 -Title "构建通过" -Kind "bridge.ci" -Content '{"body":"528/528"}'
+```
+
+协议见 [docs/protocol.md](docs/protocol.md)（一次连接一条消息，UTF-8 JSON lines，
+服务端回一行确认）。其他语言连 `\\.\pipe\DynamicIslandWin-v1` 写一行即可。
 
 ## 它显示什么
 
