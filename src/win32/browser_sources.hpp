@@ -717,7 +717,10 @@ private:
             page->download_progress =
                 known > 0 ? sum / static_cast<double>(known)
                           : (total > 0 ? static_cast<double>(got) / static_cast<double>(total) : -1.0);
-            char hint[32];
+            // 必须零初始化：下面两个分支在「无 Content-Length + received=0」时
+            // 都不命中，会把未初始化的栈内存直接赋给 download_hint，
+            // 岛上就渲染出一串乱码（issue #2 第 7 条）。
+            char hint[32] = {};
             if (page->download_progress >= 0.0) {
                 std::snprintf(hint, sizeof(hint), "%d%%", static_cast<int>(page->download_progress * 100.0));
             } else if (got > 0) {

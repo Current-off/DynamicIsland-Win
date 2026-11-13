@@ -53,6 +53,11 @@ public:
                  const Backdrop* epoch) {
         if (w <= 0 || h <= 0) return false;
         if (!GrabScreen(x, y, w, h)) return false;
+        // 记下抓屏原点：渲染层用 X()/Y() 算纹理偏移（overlay_main 的
+        // glass.offset_x = X() - anchor_x）。这里不写的话它们恒为 0，
+        // 取样区整体错位 glass_x —— 副屏上错约一整屏宽（issue #2 第 4 条）。
+        x_ = x;
+        y_ = y;
 
         // 修补：把胶囊挡住的区域填回 epoch 时刻的干净像素。
         if (epoch != nullptr && epoch->full_ == full_ && epoch->Valid()) {

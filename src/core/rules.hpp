@@ -277,7 +277,11 @@ struct RuleConfig {
         out += "  \"agent_idle_sec\": " + std::to_string(agent_idle_sec) + ",\n";
         out += std::string("  \"simplify_chinese\": ") +
                (simplify_chinese ? "true" : "false") + ",\n";
-        out += "  \"lyrics_proxy\": \"" + lyrics_proxy + "\"\n";
+        // 必须 Quote：这是 ToJson 里唯一不经转义的字符串字段。值里出现一个反斜杠
+        //（局域网代理串很常见）就会产出非法 JSON，下次启动 Parse 失败 → 整份回退
+        // 默认 → 用户所有设置丢失（issue #2 第 6 条）。
+        // json::Quote **自带两侧引号**，这里不能再包一层（否则是 ""...""）。
+        out += "  \"lyrics_proxy\": " + json::Quote(lyrics_proxy) + "\n";
         out += "}\n";
         return out;
     }

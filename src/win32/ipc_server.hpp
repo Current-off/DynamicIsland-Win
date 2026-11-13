@@ -180,18 +180,26 @@ private:
             return;
         }
 
+        // 队列上限：主循环每帧都会 TakeAll，正常流程攒不下几条。
+        // 但本机**任意进程**都能往管道里 Flood —— 一个写错的脚本循环推 10 万条，
+        // 这里原本没有任何上限，内存会被吃光。
+        // 注意：判定在锁内，**回包必须在锁外**。Respond 里有 FlushFileBuffers，
+        // 会阻塞到客户端读走；而主线程每帧都要抢这把锁（TakeAll），
+        // 一个「连上却不读」的客户端就能把渲染循环冻死（issue #2 第 2 条）。
+        bool queue_full = false;
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
-            // 队列上限：主循环每帧都会 TakeAll，正常流程攒不下几条。
-            // 但本机**任意进程**都能往管道里 Flood —— 一个写错的脚本循环推 10 万条，
-            // 这里原本没有任何上限，内存会被吃光，表现为岛突然膨胀然后被杀。
             if (queue_.size() >= kMaxQueued) {
-                ++rejected_;
-                Respond(pipe, false, "queue full");
-                Log("ipc: reject (queue full)");
-                return;
+                queue_full = true;
+            } else {
+                queue_.push_back(request);
             }
-            queue_.push_back(request);
+        }
+        if (queue_full) {
+            ++rejected_;
+            Respond(pipe, false, "queue full");
+            Log("ipc: reject (queue full)");
+            return;
         }
         ++accepted_;
         Respond(pipe, true, "");

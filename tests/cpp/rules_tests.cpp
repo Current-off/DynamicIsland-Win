@@ -89,15 +89,19 @@ void TestConfigRoundTrip() {
     cfg.quiet.to_min = 7 * 60;
     cfg.fullscreen_hold = false;
     cfg.glass = false;
+    // 含反斜杠的代理串：ToJson 若不做转义，产出的 JSON 无法解析，
+    // FromJson 会整份回退默认值 —— 用户全部设置丢失（issue #2 第 6 条）。
+    cfg.lyrics_proxy = "http://192.168.1.1\\x:8080";
 
     const std::string text = cfg.ToJson();
     json::Value root;
     CHECK(json::Parse(text, root, nullptr));
     const RuleConfig back = RuleConfig::FromJson(root);
     CHECK(back.events.volume == false);
-    CHECK(back.events.media == true);
-    CHECK(back.app_block.size() == 2);
+    CHECK(back.events.media == true);    CHECK(back.app_block.size() == 2);
     CHECK(back.app_block[1] == "迅雷");
+    // 反斜杠代理串必须原样往返，且不能牵连其它字段
+    CHECK(back.lyrics_proxy == cfg.lyrics_proxy);
     CHECK(back.ext_block.size() == 2);
     CHECK(back.ext_block[0] == "tmp");
     CHECK(back.clipboard.min_chars == 4);
