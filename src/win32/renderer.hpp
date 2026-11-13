@@ -1074,7 +1074,12 @@ private:
             stops[3] = Gdiplus::Color(solid, 9, 9, 12);
         }
         rim.SetInterpolationColors(stops, at, 4);
-        Gdiplus::Pen pen(&rim, std::max(1.0f, 1.5f * scale));
+        // 描边宽度跟着胶囊尺寸走，不能写死。写死 1.5*scale 时：紧凑态(46 高)
+        // 占比合适，展开态(124 高)还是那 1px —— 在弧线上被抗锯齿摊成半透明，
+        // 看起来就是"圆角没有描边"。同文件里液态玻璃的镜面线本来就是按高度算的
+        //（r.Height * 0.024f），这里却固定，属于同一圈边框两套宽度逻辑。
+        const float rim_w = std::clamp(r.Height * 0.024f, 1.5f * scale, 3.2f * scale);
+        Gdiplus::Pen pen(&rim, rim_w);
         // 描边必须裁到胶囊内侧再画。Pen 以路径为中心线，默认有一半落在路径外；
         // 那半个像素在浅色壁纸上就是一圈灰线，看起来像胶囊被切了一刀。
         const Gdiplus::GraphicsState state = g.Save();
@@ -1102,7 +1107,7 @@ private:
         Gdiplus::Color stops[3] = {top_color, mid_color, Gdiplus::Color(solid, 10, 10, 13)};
         Gdiplus::REAL at[3] = {0.0f, 0.30f, 1.0f};
         inner_rim.SetInterpolationColors(stops, at, 3);
-        Gdiplus::Pen pen(&inner_rim, std::max(1.0f, 0.8f * scale));
+        Gdiplus::Pen pen(&inner_rim, std::clamp(r.Height * 0.013f, 0.8f * scale, 1.8f * scale));
         g.DrawPath(&pen, &hp);
     }
 
