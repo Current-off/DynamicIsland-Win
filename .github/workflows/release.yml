@@ -1,0 +1,59 @@
+name: Release
+
+# 打 tag 即出包：GitHub 会构建、跑测试、打包，并把 zip 挂到 Release 页。
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# 这样别人连 README 里的构建步骤都不用看 —— 从 Releases 下载 zip、
+# 解压、双击 install.cmd 即可。
+
+on:
+  push:
+    tags: ['v*']
+
+# gh release create 需要写权限；default 的 GITHUB_TOKEN 是只读的。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 先构建再打包：包里的 exe 必须是这一版源码编出来的，
+      # 而且测试不过就不该产出可下载的发布物。
+      - name: Build and test
+        shell: pwsh
+        run: ./tools/build.ps1
+
+      - name: Package
+        shell: pwsh
+        # -SkipBuild：上一步刚编完，不必再来一遍（包脚本默认会调用 build.ps1）。
+        run: ./tools/package.ps1 -SkipBuild -Version $env:GITHUB_REF_NAME
+
+      # 用 runner 自带的 gh CLI，不引第三方 action：
+      # 少一个需要信任的外部依赖，出问题时也更容易对着文档排查。
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $zip = (Get-Item build/dist/*.zip).FullName
+          if (-not $zip) { throw "打包没有产出 zip" }
+          $size = [math]::Round((Get-Item $zip).Length / 1MB, 2)
+          "即将发布 $tag（$size MB）"
+
+          # 先探测：tag 被重打过时 Release 已存在，create 会失败，
+          # 这种情况改为覆盖上传，避免同一个版本号下出现两份包。
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip --clobber
+          } else {
+            gh release create $tag $zip --title $tag --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release 失败（退出码 $LASTEXITCODE）" }
+          "发布完成：https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
