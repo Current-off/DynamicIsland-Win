@@ -98,6 +98,13 @@ bool g_display_changed = false;
 // 在不在跑，也找不到退出的入口。再点一次 exe 就让它现身，是最短的路径。
 bool g_presence = false;
 constexpr UINT kMsgPresence = WM_APP + 2;
+constexpr UINT kMsgTray = WM_APP + 3;
+// Explorer 重启后所有托盘图标都会消失。系统会给每个顶层窗口广播一条
+// "TaskbarCreated" 注册消息，收到就必须重新 NIM_ADD，否则用户会以为
+// 程序没在跑（图标没了、胶囊又可能正处于休眠态）。
+UINT g_taskbar_created = 0;
+// 定义在文件下方的托盘段；窗口过程要先用（TaskbarCreated 广播与托盘点击）。
+bool TrayAdd(HWND hwnd);
 
 // ---- 展开态交互状态（全部只在窗口线程读写，无需加锁）----
 struct BoxD {
@@ -364,6 +371,11 @@ void NoteVolumeArrival(LPARAM lparam) {
 }
 
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    // Explorer 重启的广播：必须在 switch 之前判断，它是运行时注册的消息号。
+    if (g_taskbar_created != 0 && msg == g_taskbar_created) {
+        TrayAdd(hwnd);
+        return 0;
+    }
     switch (msg) {
         case WM_LBUTTONDOWN: {
             // 按下就要判定命中：进度条要立刻进入拖动并捕获鼠标，
@@ -441,6 +453,13 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             return 0;
         case kMsgPresence:
             g_presence = true;
+            return 0;
+        case kMsgTray:
+            // 左键和右键弹同一个菜单：托盘只有一个入口，不制造第二套交互。
+            // 菜单本身按 GetCursorPos 定位，所以直接复用主循环那条路径。
+            if (LOWORD(lparam) == WM_LBUTTONUP || LOWORD(lparam) == WM_RBUTTONUP) {
+                g_menu = true;
+            }
             return 0;
         case WM_DEVICECHANGE:
             if (wparam == DBT_DEVICEARRIVAL) NoteVolumeArrival(lparam);
@@ -803,6 +822,39 @@ int ShowContextMenu(HWND hwnd, bool paused, int visible_count, bool overview) {
     ::DestroyMenu(menu);
     ::PostMessageW(hwnd, WM_NULL, 0, 0);
     return cmd;
+}
+
+// ---------- 托盘图标 ----------
+// 胶囊是一个置顶的透明窗口：没有任务栏按钮，也不进 Alt-Tab。没有托盘时，
+// 用户唯一能让它停下来的方式就是右键那颗胶囊 —— 而它可能正处于休眠（只剩
+// 一条极淡的细把手）甚至全屏避让（完全不显示）的状态，等于无路可走。
+//
+// 图标用系统通用图标兜底：仓库里没有 .ico 资源，宁可用一个不漂亮的图标，
+// 也好过注册不上 —— 这只影响观感，不影响「能不能退出/进设置」。
+constexpr UINT kTrayId = 1;
+
+NOTIFYICONDATAW MakeTrayData(HWND hwnd) {
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = kTrayId;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = kMsgTray;
+    nid.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
+    ::lstrcpynW(nid.szTip, L"DynamicIsland-Win（左键/右键打开菜单）",
+                static_cast<int>(std::size(nid.szTip)));
+    return nid;
+}
+
+bool TrayAdd(HWND hwnd) {
+    NOTIFYICONDATAW nid = MakeTrayData(hwnd);
+    return ::Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;
+}
+
+void TrayRemove(HWND hwnd) {
+    NOTIFYICONDATAW nid = MakeTrayData(hwnd);
+    nid.uFlags = 0;
+    ::Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
 // ---------- 场景脚本：驱动真实 ActivityRuntime，而不是直接摆弄动画 ----------
@@ -1816,6 +1868,15 @@ int Run() {
     surface.Clear();
     present(anchor_x(surface.Width()), screen_top, 0);
     ::ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+    // 托盘在进入主循环前注册。注册失败不算致命：菜单仍可从胶囊右键进入，
+    // 但要在日志里说清楚，否则"没有托盘"会被当成 bug 反复排查。
+    if (TrayAdd(hwnd)) {
+        note("tray: registered");
+    } else {
+        note("tray: unavailable (shell not ready?) - use capsule right-click");
+    }
+    g_taskbar_created = ::RegisterWindowMessageW(L"TaskbarCreated");
 
     Demo demo;
     Animation anim;
@@ -3021,6 +3082,10 @@ int Run() {
     // 先停采集线程再收尾：它还在调 WinRT / COM，进程直接退会留下悬挂的异步操作。
     g_sources = nullptr;
     sources.Stop();
+
+    // 托盘图标必须在进程退出前主动删除，否则会在托盘区留一个"幽灵图标"，
+    // 直到用户把鼠标划过去才消失。
+    TrayRemove(hwnd);
 
     note("clean exit at t=+" +
          std::to_string(std::chrono::duration<double>(Clock::now() - start).count()).substr(0, 5) +
