@@ -49,6 +49,7 @@
 #include "backdrop.hpp"
 #include "layered_surface.hpp"
 #include "hanzi.hpp"
+#include "ipc_server.hpp"
 #include "live_sources.hpp"
 #include "lyrics.hpp"
 #include "renderer.hpp"
@@ -1878,6 +1879,14 @@ int Run() {
     }
     g_taskbar_created = ::RegisterWindowMessageW(L"TaskbarCreated");
 
+    // ---- 外部推送上岛（命名管道）----
+    // 一次连接一条消息；解码在工作线程，主循环只从队列取现成的请求。
+    // 这样别的程序（CI、下载器、脚本、IDE）不必弹自己的通知，直接上岛。
+    diw::win32::IpcServer ipc;
+    ipc.SetLogger([&note](const std::string& line) { note(line); });
+    ipc.Start();
+    note("ipc: listening on \\\\.\\pipe\\DynamicIslandWin-v1");
+
     Demo demo;
     Animation anim;
 
@@ -2684,6 +2693,31 @@ int Run() {
             }
         }
 
+        // 外部推送：先落地，再让 Tick 把它算进这一帧 —— 否则会白等一帧才显示。
+        std::vector<diw::ipc::Request> ipc_requests;
+        ipc.TakeAll(&ipc_requests);
+        for (const auto& request : ipc_requests) {
+            if (request.type == diw::ipc::Request::Type::End) {
+                demo.runtime->EndActivity(request.activity.id);
+                note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] [ipc] -" +
+                     request.activity.id);
+                continue;
+            }
+            diw::Activity incoming = request.activity;
+            if (incoming.created_at_ms == 0) incoming.created_at_ms = now_ms;
+            // 没给过期时间就按 8 秒算：外部推送绝大多数是「通知型」事件，
+            // 不设上限它会永远占着主位（Activity 的 stale 语义就是干这个的）。
+            if (!incoming.stale_at_ms.has_value()) incoming.stale_at_ms = now_ms + 8000;
+            std::string err;
+            if (StartActivitySafe(*demo.runtime, incoming, &err)) {
+                note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] [ipc] +" + incoming.kind +
+                     " 「" + incoming.title + "」");
+            } else {
+                note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] [ipc] !skip " +
+                     incoming.kind + ": " + err);
+            }
+        }
+
         const Frame frame = demo.runtime->Tick(now_ms, demo.expand_id).frame;
 
         // 展开目标已经退场（过期 / 被更高优先级抢占）时，必须把展开意图一起清掉。
@@ -3086,6 +3120,10 @@ int Run() {
     // 托盘图标必须在进程退出前主动删除，否则会在托盘区留一个"幽灵图标"，
     // 直到用户把鼠标划过去才消失。
     TrayRemove(hwnd);
+
+    ipc.Stop();
+    note("ipc: accepted " + std::to_string(ipc.Accepted()) + ", rejected " +
+         std::to_string(ipc.Rejected()));
 
     note("clean exit at t=+" +
          std::to_string(std::chrono::duration<double>(Clock::now() - start).count()).substr(0, 5) +

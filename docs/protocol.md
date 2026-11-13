@@ -72,3 +72,43 @@
 - 管道 ACL 限定当前 Windows 用户；不监听任何 TCP 端口。
 - 凭据（日历 OAuth token 等）仅由桥接进程用 DPAPI 加密存储，永不进入协议消息或日志。
 - 剪贴板内容不经过协议传输，除非用户显式启用对应 Provider（默认关闭）。
+
+## 实现状态（2026-11-13）
+
+| 能力 | 状态 | 位置 |
+|------|------|------|
+| `activity.upsert` / `activity.end` | ✅ 已实现 | `src/core/ipc_protocol.hpp`（解码）+ `src/win32/ipc_server.hpp`（管道） |
+| `state.frame` / `heartbeat` / `hello` / `settings.update` | ❌ 未实现 | 属于"双进程 + 桥接"形态，当前是单进程，调度结果不经过协议 |
+| 管道 ACL | 走默认 DACL | 创建者（当前用户）独占；其他会话拿到 ACCESS_DENIED，不会劫持 |
+| 行尾 | 容忍 CRLF | 只剥行尾那一个 `\r`，内嵌换行仍然拒绝 |
+
+### 与文档的三处补充
+
+1. **一次连接一条消息**：服务端读完一行就回一行确认并断开，不做长连接。
+   长连接要心跳、重连退避、半包处理，而"一条命令推一条活动"是最容易被
+   别的语言调用的形态。
+2. **默认过期 8 秒**：`staleAtMs` 可省略；省略时按 8s 处理。外部推送绝大多数是
+   通知型事件，不设上限会永远占着主位。
+3. **上限**：单行 8KB、id 128B、kind 64B、title 512B、content 4KB。
+   超限在解码阶段就拒绝，管道层只负责"别读爆内存"。
+
+### 客户端
+
+```
+tools\send-activity.ps1 -Title "构建通过" -Kind "bridge.ci" -Content '{"body":"528/528"}'
+tools\send-activity.ps1 -End -Id "cli:demo"
+```
+
+其他语言照同一份协议写三行即可：连 `\\.\pipe\DynamicIslandWin-v1`、
+写一行 JSON（UTF-8，`\n` 结尾）、读到 EOF 拿确认。
+
+### 实测
+
+```
+[ipc] +bridge.ci 「构建通过 · 3m12s」      ← upsert
+[ipc] -cli:demo                            ← end
+ipc: reject (protocolVersion must be a positive integer)
+```
+
+解码器另有 31 项断言（`core_tests`：正常路径 / 缺 content / 未知字段前向兼容 /
+CRLF / 15 种必须拒绝的畸形输入 / 超长行）。

@@ -1,6 +1,7 @@
 // C++ 核心域确定性单元测试（无第三方依赖）。
 // 覆盖正常路径、边界值、反例与降级链；与 Python 侧 52 项用例语义对应。
 #include "activity.hpp"
+#include "ipc_protocol.hpp"
 
 #include <cstdio>
 #include <string>
@@ -262,6 +263,81 @@ void TestRestartAfterEnd() {
     CHECK(rt.Store().Get("live-media")->content_json == "{\"title\":\"B\"}");
 }
 
+// IPC 协议解码：与 docs/protocol.md 的 v1 判定顺序一致。
+// 这里只测"协议对不对"，不测管道读写（那属于 win32 层，需要真句柄）。
+void TestIpcDecode() {
+    using diw::ipc::DecodeLine;
+    using diw::ipc::Request;
+    std::string err;
+    Request req;
+
+    const std::string ok_line =
+        R"({"protocolVersion":1,"seq":1,"type":"activity.upsert","ts":1000,)"
+        R"("activity":{"id":"ci:build","kind":"bridge.ci","title":"构建通过","relevanceScore":80,)"
+        R"("createdAtMs":900,"staleAtMs":9000,"content":{"body":"3m12s"}}})";
+    CHECK(DecodeLine(ok_line, &req, &err));
+    CHECK(req.type == Request::Type::Upsert);
+    CHECK(req.activity.id == "ci:build");
+    CHECK(req.activity.kind == "bridge.ci");
+    CHECK(req.activity.title == "构建通过");
+    CHECK(req.activity.relevance_score == 80.0);
+    CHECK(req.activity.created_at_ms == 900);
+    CHECK(req.activity.stale_at_ms.has_value() && *req.activity.stale_at_ms == 9000);
+    // content 被重新序列化（紧凑、键序保持），渲染层只认 JSON 文本。
+    CHECK(req.activity.content_json == "{\"body\":\"3m12s\"}");
+
+    // 结束消息只需要 id。
+    CHECK(DecodeLine(R"({"protocolVersion":1,"seq":2,"type":"activity.end","ts":1100,)"
+                     R"("activity":{"id":"ci:build"}})",
+                     &req, &err));
+    CHECK(req.type == Request::Type::End);
+    CHECK(req.activity.id == "ci:build");
+
+    // 缺 content 时补空对象，渲染层据 kind 走默认图形。
+    CHECK(DecodeLine(R"({"protocolVersion":1,"seq":3,"type":"activity.upsert","ts":1,)"
+                     R"("activity":{"id":"x","kind":"bridge.t","title":"t"}})",
+                     &req, &err));
+    CHECK(req.activity.content_json == "{}");
+    // 未知字段必须被忽略（前向兼容），而不是报错。
+    CHECK(DecodeLine(R"({"protocolVersion":1,"seq":4,"type":"activity.upsert","ts":1,)"
+                     R"("future":"ignored","activity":{"id":"y","kind":"k","title":"t","more":1}})",
+                     &req, &err));
+
+    // 以下每一条都必须被拒绝，且给出原因。
+    const char* bad[] = {
+        "",                                                                   // 空行
+        "not json",                                                           // 非法 JSON
+        "[]",                                                                 // 根不是对象
+        R"({"seq":1,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k","title":"t"}})",
+        R"({"protocolVersion":2,"seq":1,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k","title":"t"}})",
+        R"({"protocolVersion":1,"seq":-1,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k","title":"t"}})",
+        R"({"protocolVersion":1,"seq":1.5,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k","title":"t"}})",
+        R"({"protocolVersion":1,"seq":true,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k","title":"t"}})",
+        R"({"protocolVersion":1,"seq":1,"type":"nope","ts":1,"activity":{"id":"a","kind":"k","title":"t"}})",
+        R"({"protocolVersion":1,"seq":1,"type":"activity.upsert","ts":1,"activity":[]})",
+        R"({"protocolVersion":1,"seq":1,"type":"activity.upsert","ts":1,"activity":{"kind":"k","title":"t"}})",
+        R"({"protocolVersion":1,"seq":1,"type":"activity.upsert","ts":1,"activity":{"id":"a","title":"t"}})",
+        R"({"protocolVersion":1,"seq":1,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k"}})",
+        R"({"protocolVersion":1,"seq":1,"type":"activity.upsert","ts":1,"activity":{"id":"a","kind":"k","title":"t","content":[]}})",
+    };
+    for (const char* line : bad) {
+        err.clear();
+        const bool ok = DecodeLine(line, &req, &err);
+        ++g_run;
+        if (ok || err.empty()) {
+            ++g_failed;
+            std::printf("  FAIL  should reject: %s\n", line);
+        }
+    }
+
+    // 多行输入必须拒绝：一条消息一行是这套协议的基本假设。
+    CHECK(!DecodeLine("{\"protocolVersion\":1}\n{\"protocolVersion\":1}", &req, &err));
+
+    // 超长行必须拒绝（防止外部程序把服务端内存吃光）。
+    std::string huge(9 * 1024, 'a');
+    CHECK(!DecodeLine(huge, &req, &err));
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +350,7 @@ int main() {
     TestRuntimeDegradation();
     TestStaleReentry();
     TestRestartAfterEnd();
+    TestIpcDecode();
     std::printf("run=%d failed=%d\n", g_run, g_failed);
     return g_failed == 0 ? 0 : 1;
 }
