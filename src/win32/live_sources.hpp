@@ -227,8 +227,13 @@ inline std::string SaveCoverToCache(
         const auto raw_size = stream.Size();
         if (raw_size == 0 || raw_size > 16ull * 1024ull * 1024ull) return std::string();
         winrt::Windows::Storage::Streams::DataReader reader(stream);
-        reader.LoadAsync(static_cast<std::uint32_t>(raw_size)).get();
-        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(raw_size));
+        // LoadAsync 的返回值是**实际载入的字节数**，不一定等于 Size()：
+        // 流可以分块返回。原实现丢掉这个值、按 Size() 分配再 ReadBytes，
+        // 不足的部分就留成 0 —— PNG 解码随即失败，表现为"封面时有时无"，
+        // 而且不报错。必须按实际载入量分配与读取。
+        const std::uint32_t loaded = reader.LoadAsync(static_cast<std::uint32_t>(raw_size)).get();
+        if (loaded == 0) return std::string();
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(loaded));
         winrt::array_view<std::uint8_t> view(bytes);
         reader.ReadBytes(view);
 
@@ -913,6 +918,17 @@ public:
 
     static constexpr int kTickMs = 100;         // 主循环节拍
     static constexpr int kMediaEveryTicks = 4;  // 400ms 采一次媒体
+    // 下载目录：目录 mtime 没变时跳过全目录扫描（见 PollFile），
+    // 但正在下载的文件只改自身 mtime、不改目录 mtime，所以每 10 拍（1s）强制全扫一次。
+    // 1s 的检测延迟对 8s 的提示时长不可感知，换来常态下 FindFirstFileW 从 10 次/秒降到约 1 次/秒。
+    static constexpr int kFileFullScanTicks = 10;
+    // 音量：读一次要跨进程 COM 到 audiosrv（两次），100ms 一拍纯属浪费。
+    // 300ms 对「调音量后弹 2.5s 提示」这条链路完全够用。
+    static constexpr int kVolumePollTicks = 3;
+    // 媒体属性缓存（app_id → 标题/封面）的容量与过期：只为长跑不无界增长，
+    // 正常播放的会话每隔 12 拍刷新一次，远小于过期阈值。
+    static constexpr std::size_t kMediaPropsKeep = 16;
+    static constexpr int kMediaPropsStalePolls = 150;  // 60s 没刷新就丢弃
     // Agent 会话文件：800ms 一次。比媒体慢一点没关系（agent 的一步要几秒），
     // 但比 2s 快 —— 用户盯着看的时候，800ms 内的更新看起来才是「实时」的。
     static constexpr int kAgentEveryTicks = 8;
@@ -1365,6 +1381,19 @@ private:
                 list.push_back(std::move(m));
             }
 
+            // media_props_ 是只增不减的 map：长时间运行下会随「出现过的 app_id」
+            // 单调增长。会话早已消失的条目留着没有意义，按 last_read 淘汰一批。
+            // 正常播放的会话每 4.8s（12 拍）就会刷新一次 last_read，不会被误删。
+            if (media_props_.size() > kMediaPropsKeep) {
+                for (auto it = media_props_.begin(); it != media_props_.end();) {
+                    if (media_poll_count_ - it->second.last_read > kMediaPropsStalePolls) {
+                        it = media_props_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
             // 正在播的排前面；再按 app_id 排，保证顺序稳定（否则岛会互相换位）
             std::sort(list.begin(), list.end(), [](const MediaState& a, const MediaState& b) {
                 if (a.playing != b.playing) return a.playing;
@@ -1575,6 +1604,10 @@ private:
         } catch (const winrt::hresult_error& e) {
             SetError("PollNotifications", e);
         } catch (...) {
+            // 非 HRESULT 异常（例如 std::bad_alloc、WinRT 迭代器的类型错误）原先
+            // 完全静默，表现为"通知就是不弹"且日志里一行线索都没有。
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot_.last_error = "PollNotifications unknown failure";
         }
     }
 
@@ -1635,9 +1668,12 @@ private:
                     std::wstring text(p, ::wcsnlen(p, 400));
                     clip.text = Narrow(text);
                     ::GlobalUnlock(h);
+                    // kind 必须在**取到内容之后**才置位。原先它写在两层 if 外面，
+                    // GetClipboardData / GlobalLock 失败时 kind 仍是 "text"、正文为空，
+                    // 末尾的 if (clip.kind.empty()) 拦不住，于是岛上弹出一条空白提示。
+                    clip.kind = "text";
                 }
             }
-            clip.kind = "text";
         }
         ::CloseClipboard();
 
@@ -1652,6 +1688,7 @@ private:
 
     // ---- 电源 / 音量 / 全屏 ----
     void PollMisc() {
+        ++misc_tick_;
         SYSTEM_POWER_STATUS ps{};
         if (::GetSystemPowerStatus(&ps) && ps.BatteryFlag != 128 && ps.BatteryFlag != 255) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1667,7 +1704,9 @@ private:
             snapshot_.power.ac_online = ps.ACLineStatus == 1;
         }
 
-        if (volume_) {
+        // 音量单独降频：电源状态与全屏检测必须保持 100ms（全屏避让要跟手），
+        // 而音量读一次是两次跨进程 COM 调用，没必要跟着 100ms 跑。
+        if (volume_ && (misc_tick_ % kVolumePollTicks) == 0) {
             float scalar = 0.0f;
             BOOL mute = FALSE;
             if (SUCCEEDED(volume_->GetMasterVolumeLevelScalar(&scalar)) &&
@@ -1728,6 +1767,21 @@ private:
 
     void PollFile() {
         if (downloads_dir_.empty()) return;
+        // 先花一次 GetFileAttributesExW 看目录动过没有：目录 mtime 只在
+        // 新增 / 删除 / 改名时变化，**文件内容增长不会改它** —— 所以下载中的文件
+        // 靠这条判断不出来，必须配合周期性全扫（见 kFileFullScanTicks）。
+        bool dir_changed = true;
+        WIN32_FILE_ATTRIBUTE_DATA info{};
+        if (::GetFileAttributesExW(downloads_dir_.c_str(), GetFileExInfoStandard, &info) != FALSE) {
+            const std::uint64_t dir_write =
+                (static_cast<std::uint64_t>(info.ftLastWriteTime.dwHighDateTime) << 32) |
+                static_cast<std::uint64_t>(info.ftLastWriteTime.dwLowDateTime);
+            dir_changed = (dir_write != dir_stamp_);
+            dir_stamp_ = dir_write;
+        }
+        ++file_poll_tick_;
+        if (!dir_changed && (file_poll_tick_ % kFileFullScanTicks) != 0) return;
+
         std::int64_t stamp = 0;
         const std::wstring newest = NewestFileInDownloads(&stamp);
         if (newest.empty() || stamp == last_file_stamp_) return;
@@ -1757,6 +1811,11 @@ private:
             }
             volume_ = vol;
         } catch (...) {
+            // 只记一次：失败后每 5s 会重试（kAudioRetryTicks），逐次记会把日志刷满。
+            if (!audio_error_logged_) {
+                audio_error_logged_ = true;
+                Log("audio: endpoint init failed (volume hint disabled)");
+            }
         }
     }
 
@@ -1827,6 +1886,10 @@ private:
 
     std::wstring downloads_dir_;
     std::int64_t last_file_stamp_ = 0;
+    std::uint64_t dir_stamp_ = 0;   // 下载目录上次的 ftLastWriteTime（0 = 还没读过）
+    int file_poll_tick_ = 0;        // 文件轮询计数，用于周期性强制全扫
+    int misc_tick_ = 0;             // 电源/音量计数，用于给音量降频
+    bool audio_error_logged_ = false;  // 音频端点初始化失败只记一次日志
     DWORD clip_seq_seen_ = 0;
 };
 
