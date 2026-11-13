@@ -26,6 +26,9 @@
 #include <windows.h>
 #include <dbt.h>
 #include <shellapi.h>
+// 只用到 MINIDUMP_TYPE 等类型定义；MiniDumpWriteDump 走 GetProcAddress 动态解析，
+// 因此不需要链接 dbghelp.lib（见 CrashFilter）。
+#include <dbghelp.h>
 
 #include <algorithm>
 #include <chrono>
@@ -898,7 +901,13 @@ struct Animation {
         vw = vh = vd = 0.0;
     }
 
-    void Approach(double target_w, double target_h, double target_detached, double target_alpha, double dt) {
+    // 返回值表示「这一帧有没有真的动」：几何（弹簧）与透明度任一项变化即为 true。
+    // 主循环用它决定要不要跑 60fps —— 见 frame_budget。
+    bool Approach(double target_w, double target_h, double target_detached, double target_alpha, double dt) {
+        const double w0 = w;
+        const double h0 = h;
+        const double d0 = detached;
+        const double a0 = alpha;
         // iOS 灵动岛的手感来自「冲过头一点再回落」，ζ = c/(2√k) ≈ 0.68，
         // 过冲约 5%：肉眼能感觉到"弹"，但不会晃。
         constexpr double kStiffness = 420.0;
@@ -917,6 +926,7 @@ struct Animation {
         const double k_alpha = 1.0 - std::exp(-dt / 0.05);
         alpha += (target_alpha - alpha) * k_alpha;
         if (std::fabs(alpha - target_alpha) < 0.002) alpha = target_alpha;
+        return w != w0 || h != h0 || detached != d0 || alpha != a0;
     }
 
 private:
@@ -932,9 +942,23 @@ private:
     }
 };
 
+// 一条坏活动不该让整颗胶囊消失：ActivityStore::Upsert 对空 id / 空 kind /
+// stale_at 早于 created_at 会抛异常，而 StartActivity 不吞它 —— 抛到 wWinMain
+// 只剩一行 FATAL，用户看到的就是「胶囊莫名不见了」。这里就地兜住、把原因交回
+// 调用点记录，代价是跳过这一条活动，而不是整个进程。
+bool StartActivitySafe(ActivityRuntime& runtime, const Activity& activity, std::string* error) {
+    try {
+        runtime.StartActivity(activity);
+        return true;
+    } catch (const std::exception& e) {
+        if (error != nullptr) *error = e.what();
+        return false;
+    }
+}
+
 struct Demo {
     // unique_ptr 而非值成员：ActivityRuntime 内含 const 转移表，不可赋值。
-    std::unique_ptr<ActivityRuntime> runtime{new ActivityRuntime()};
+    std::unique_ptr<ActivityRuntime> runtime{std::make_unique<ActivityRuntime>()};
     std::size_t cursor = 0;
     bool bridge_online = true;
     bool suspended = false;
@@ -942,7 +966,7 @@ struct Demo {
     bool overview = false;  // 一览：并行任务全部铺成独立岛（双击 / 右键菜单切换）
 
     void Reset() {
-        runtime.reset(new ActivityRuntime());
+        runtime = std::make_unique<ActivityRuntime>();
         runtime->SetBridgeOnline(true);
         runtime->SetSuspended(false);
         bridge_online = true;
@@ -953,9 +977,11 @@ struct Demo {
 
     void Apply(Action action, std::int64_t now_ms) {
         switch (action) {
-            case Action::StartMedia: runtime->StartActivity(MakeMedia()); break;
-            case Action::StartCalendar: runtime->StartActivity(MakeCalendar()); break;
-            case Action::StartDownload: runtime->StartActivity(MakeDownload(now_ms)); break;
+            case Action::StartMedia: StartActivitySafe(*runtime, MakeMedia(), nullptr); break;
+            case Action::StartCalendar: StartActivitySafe(*runtime, MakeCalendar(), nullptr); break;
+            case Action::StartDownload:
+                StartActivitySafe(*runtime, MakeDownload(now_ms), nullptr);
+                break;
             case Action::EndCalendar: runtime->EndActivity(kCalendarId); break;
             case Action::BridgeOffline:
                 bridge_online = false;
@@ -1548,9 +1574,10 @@ void RotateLogIfNeeded(const std::string& path) {
     const unsigned long long size =
         (static_cast<unsigned long long>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
     if (size < 2ull * 1024ull * 1024ull) return;
-    const std::wstring old_path = wpath + L".old";
-    ::DeleteFileW(old_path.c_str());
-    ::MoveFileW(wpath.c_str(), old_path.c_str());
+    // 覆盖式移动而不是「先 DeleteFile 再 MoveFile」：那两步之间有个窗口，
+    // 一旦移动失败（例如另一个实例还开着日志），旧 .old 已经被删、这次也没滚成，
+    // 上一份现场就白丢了。
+    ::MoveFileExW(wpath.c_str(), (wpath + L".old").c_str(), MOVEFILE_REPLACE_EXISTING);
 }
 
 int Run() {
@@ -1721,15 +1748,67 @@ int Run() {
     note("glass: " + std::string(rules.Config().glass ? "on (backdrop blur)" : "off (opaque)"));
 
     bool present_failed = false;
+    // 提交统计：胶囊静止时绝大多数帧的像素与上一帧完全相同，跳过提交是常态。
+    // 把 skip/total 写进周期日志，便于判断"重绘是否真的降下来了"。
+    std::uint64_t present_total = 0;
+    std::uint64_t present_skipped = 0;
     auto present = [&](int x, int y, BYTE alpha) {
         if (present_failed) return;
         try {
-            surface.Present(hwnd, x, y, alpha);
+            ++present_total;
+            if (!surface.PresentIfChanged(hwnd, x, y, alpha)) ++present_skipped;
         } catch (const std::exception& e) {
             present_failed = true;
             note(std::string("WARN: present failed, continue headless: ") + e.what());
         }
     };
+
+    // 每帧的 GDI+ 质量档位（两段绘制都要设一遍，因为中间会重建 Graphics）。
+    auto set_quality = [](Gdiplus::Graphics& g) {
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+        g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    };
+
+    // 铬层的缓存键：凡是会影响「底/受光/描边/投影」的输入都要进来。
+    // 尺寸类用千分之一像素取整，避免弹簧末端的浮点抖动导致每帧假失配。
+    auto chrome_key_of = [](int cw, int ch, const CapsuleView& v, const GlassParams& gl) {
+        std::uint64_t h = 1469598103934665603ull;
+        auto mix = [&h](std::uint64_t x) {
+            h ^= x;
+            h *= 1099511628211ull;
+        };
+        auto mix_milli = [&mix](double value) {
+            mix(static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(value * 1000.0))));
+        };
+        mix(static_cast<std::uint64_t>(cw));
+        mix(static_cast<std::uint64_t>(ch));
+        mix_milli(v.content_w);
+        mix_milli(v.content_h);
+        mix_milli(v.detached_w);
+        mix(static_cast<std::uint64_t>(std::lround(std::clamp(v.alpha, 0.0, 1.0) * 255.0)));
+        mix(static_cast<std::uint64_t>(v.opacity_mode));
+        mix(v.expanded ? 1u : 0u);
+        mix(v.overview ? 1u : 0u);
+        mix(v.sleep_bar ? 1u : 0u);
+        mix(static_cast<std::uint64_t>(v.items.size()));
+        mix(static_cast<std::uint64_t>(v.detached_items.size()));
+        // 玻璃纹理每换一个纪元就是新对象，指针变化即可作为失效信号。
+        mix(reinterpret_cast<std::uint64_t>(gl.backdrop));
+        mix_milli(gl.offset_x);
+        mix_milli(gl.offset_y);
+        mix_milli(gl.full_w);
+        mix_milli(gl.full_h);
+        return h;
+    };
+
+    // 铬层缓存：命中时直接把上次的像素 memcpy 回来，只重画内容。
+    std::vector<std::uint8_t> chrome_cache;
+    std::uint64_t chrome_key_cached = 0;
+    std::uint64_t chrome_hits = 0;
+    std::uint64_t chrome_calls = 0;
 
     // 首次提交必须在 ShowWindow 之前，否则会闪一块黑矩形。
     surface.EnsureSize(static_cast<int>(Layout::kCompactW * scale + 2 * Layout::kMargin * scale),
@@ -2058,14 +2137,24 @@ int Run() {
 
                     if (existing == nullptr || already_stale || content_changed) {
                         if (existing != nullptr) demo.runtime->Store().Remove(a.id);
-                        demo.runtime->StartActivity(a);
-                        note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] " +
-                             (content_changed ? "~" : "+") + a.kind + " 「" + a.title + "」");
+                        std::string err;
+                        if (StartActivitySafe(*demo.runtime, a, &err)) {
+                            note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] " +
+                                 (content_changed ? "~" : "+") + a.kind + " 「" + a.title + "」");
+                        } else {
+                            note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] !skip " +
+                                 a.kind + ": " + err);
+                        }
                     }
                 } else {
                     // 持续类（媒体/低电量）：每帧刷新，才能同步进度与百分比。
-                    demo.runtime->StartActivity(a);
-                    want_persistent.insert(a.id);
+                    std::string err;
+                    if (StartActivitySafe(*demo.runtime, a, &err)) {
+                        want_persistent.insert(a.id);
+                    } else {
+                        note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] !skip " + a.kind +
+                             ": " + err);
+                    }
                 }
             }
             // 源消失就结束：歌停了、插电了、通知过期了。
@@ -2525,8 +2614,12 @@ int Run() {
             hint.stale_at_ms = now_ms + 4500;
             demo.runtime->Store().RemoveIfStale(hint.id);
             if (demo.runtime->Store().Get(hint.id) == nullptr) {
-                demo.runtime->StartActivity(hint);
-                note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] presence hint shown");
+                std::string err;
+                if (StartActivitySafe(*demo.runtime, hint, &err)) {
+                    note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] presence hint shown");
+                } else {
+                    note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] !skip presence: " + err);
+                }
             }
         }
 
@@ -2677,8 +2770,9 @@ int Run() {
         }
         // 休眠时钟常驻：无活动也不把 alpha 目标压到 0。
         const bool want_visible = !hidden || view.sleep_bar;
-        anim.Approach(view.content_w, view.content_h, view.detached_w, want_visible ? 1.0 : 0.0,
-                      std::min(dt, 0.1));
+        const bool anim_moved =
+            anim.Approach(view.content_w, view.content_h, view.detached_w,
+                          want_visible ? 1.0 : 0.0, std::min(dt, 0.1));
 
         if (anim.alpha > 0.004) {
             hidden_presented = false;
@@ -2801,13 +2895,32 @@ int Run() {
             }
 
             {
-                Gdiplus::Graphics g(surface.Dc());
-                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-                g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
-                g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
-                g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-                g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-                renderer.Draw(g, drawn, static_cast<float>(scale), glass);
+                // 铬层：命中缓存就把像素抹回来，只重画会变的内容。
+                // 两段各用一个 Graphics 作用域，是为了让 GDI+ 在切换前把绘制刷进 DIB
+                // —— 否则存下来的"铬层像素"可能还缺最后一笔。
+                // 存像素必须发生在**画内容之前**，否则存进去的就是铬层+内容。
+                const std::uint64_t key = chrome_key_of(canvas_w, canvas_h, drawn, glass);
+                const bool hit = (chrome_key_cached == key) && !chrome_cache.empty();
+                ++chrome_calls;
+                if (hit) {
+                    ++chrome_hits;
+                    surface.LoadPixels(chrome_cache);
+                } else {
+                    {
+                        Gdiplus::Graphics g(surface.Dc());
+                        set_quality(g);
+                        renderer.Draw(g, drawn, static_cast<float>(scale), glass,
+                                      CapsuleRenderer::Phase::Chrome);
+                    }
+                    surface.SavePixels(chrome_cache);
+                    chrome_key_cached = key;
+                }
+                {
+                    Gdiplus::Graphics g(surface.Dc());
+                    set_quality(g);
+                    renderer.Draw(g, drawn, static_cast<float>(scale), glass,
+                                  CapsuleRenderer::Phase::Content);
+                }
             }
 
             if (!opt.snapshot_path.empty() && !snapshot_taken && opt.snapshot_at_ms >= 0 &&
@@ -2881,11 +2994,24 @@ int Run() {
 
         if (opt.duration_ms > 0 && now_ms >= opt.duration_ms) break;
 
-        // 休眠时钟每分钟才变一次，10fps 足够；避免为了一个静态数字
-        // 让 60fps 的绘制循环常驻，把空闲 CPU 吃掉。
-        // 休眠条每分钟只闪一次「有无」的变化，10fps 足够；没有岛时同样不需要 60fps。
-        // 避免为了一个静态画面让绘制循环常驻把空闲 CPU 吃掉。
-        const double frame_budget = (view.sleep_bar || hidden) ? 1.0 / 10.0 : 1.0 / 60.0;
+        // 帧预算分三档，依据是「这一帧到底有什么在动」：
+        //
+        //  · 隐藏 / 休眠条：10fps。休眠时钟每分钟才变一次，没有画 60fps 的理由。
+        //  · 几何或透明度在动（弹簧、展开、隐去），或媒体在播（律动条要跟拍）：60fps。
+        //  · 只剩呼吸点一类的慢动画：20fps。这类动画的频率在 0.86Hz 量级
+        //    （wave_phase 以 6 rad/s 推进，再乘 0.9），20fps 下每个周期仍有 24 帧，
+        //    肉眼与 60fps 无差别；而单帧 draw 实测 8.5ms，60fps 常驻等于白烧约 30% 单核。
+        //
+        // 交互后 1.2s 内强制 60fps：点击、拖进度条、悬停高亮都要跟手，
+        // 不能让一次点击等 50ms 才在画面上出现。
+        const bool interactive = now_ms - last_interaction_ms < 1200;
+        const bool fast = anim_moved || view.playing || interactive;
+        double frame_budget = 1.0 / 20.0;
+        if (view.sleep_bar || hidden) {
+            frame_budget = 1.0 / 10.0;
+        } else if (fast) {
+            frame_budget = 1.0 / 60.0;
+        }
         const double used = std::chrono::duration<double>(Clock::now() - now).count();
         if (used < frame_budget) {
             ::Sleep(static_cast<DWORD>((frame_budget - used) * 1000.0));
@@ -2896,7 +3022,15 @@ int Run() {
     g_sources = nullptr;
     sources.Stop();
 
-    note("clean exit at t=+");
+    note("clean exit at t=+" +
+         std::to_string(std::chrono::duration<double>(Clock::now() - start).count()).substr(0, 5) +
+         "s");
+    // 跳过提交的比例：静止画面下应接近 100%，动画/播放时接近 0。
+    // 这个数字比"感觉流畅"更能说明重绘有没有真的降下来。
+    note("present: skipped " + std::to_string(present_skipped) + "/" +
+         std::to_string(present_total) + " frames");
+    note("chrome: cached " + std::to_string(chrome_hits) + "/" + std::to_string(chrome_calls) +
+         " frames");
     if (log) log.close();
     ::DestroyWindow(hwnd);
     return 0;
@@ -2904,7 +3038,79 @@ int Run() {
 
 }  // namespace
 
+namespace {
+
+// ---- 硬崩溃现场 ----
+// C++ 的 try/catch 抓不到访问违例（SEH 不参与 C++ 栈展开），进程会直接消失，
+// 日志里连一行都不会留下。这正是「胶囊莫名不见了」里最难查的那种形态。
+// 这里装一个未处理异常过滤器：异常码 + 出错地址追加进**独立**的 crash 日志，
+// 另落一份 minidump；两个文件都不参与滚动，不会被下次启动擦掉。
+// dbghelp 按需动态加载：只为崩溃路径给发布包引入静态链接依赖不划算。
+const char* ExceptionCodeName(DWORD code) {
+    switch (code) {
+        case EXCEPTION_ACCESS_VIOLATION: return "ACCESS_VIOLATION";
+        case EXCEPTION_STACK_OVERFLOW: return "STACK_OVERFLOW";
+        case EXCEPTION_INT_DIVIDE_BY_ZERO: return "INT_DIVIDE_BY_ZERO";
+        case EXCEPTION_ILLEGAL_INSTRUCTION: return "ILLEGAL_INSTRUCTION";
+        case EXCEPTION_PRIV_INSTRUCTION: return "PRIV_INSTRUCTION";
+        case EXCEPTION_IN_PAGE_ERROR: return "IN_PAGE_ERROR";
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "ARRAY_BOUNDS_EXCEEDED";
+        case EXCEPTION_DATATYPE_MISALIGNMENT: return "DATATYPE_MISALIGNMENT";
+        default: return "UNKNOWN";
+    }
+}
+
+void WriteCrashDump(EXCEPTION_POINTERS* info, const std::wstring& path) {
+    HMODULE dbghelp = ::LoadLibraryW(L"dbghelp.dll");
+    if (dbghelp == nullptr) return;
+    using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
+                                              PMINIDUMP_EXCEPTION_INFORMATION,
+                                              PMINIDUMP_USER_STREAM_INFORMATION,
+                                              PMINIDUMP_CALLBACK_INFORMATION);
+    auto write_dump =
+        reinterpret_cast<MiniDumpWriteDumpFn>(::GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+    if (write_dump != nullptr) {
+        HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            MINIDUMP_EXCEPTION_INFORMATION mei{};
+            mei.ThreadId = ::GetCurrentThreadId();
+            mei.ExceptionPointers = info;
+            mei.ClientPointers = FALSE;
+            write_dump(::GetCurrentProcess(), ::GetCurrentProcessId(), file,
+                       static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs | MiniDumpWithHandleData),
+                       info != nullptr ? &mei : nullptr, nullptr, nullptr);
+            ::CloseHandle(file);
+        }
+    }
+    ::FreeLibrary(dbghelp);
+}
+
+void NoteFatal(const char* text) {
+    std::ofstream f(ExeDirectory() + "\\diw-overlay.crash.log",
+                    std::ios::out | std::ios::app | std::ios::binary);
+    if (!f) return;
+    f << "===== crash " << std::time(nullptr) << " =====\n" << text << "\n";
+    f.flush();
+}
+
+LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
+    const EXCEPTION_RECORD* record = (info != nullptr) ? info->ExceptionRecord : nullptr;
+    const DWORD code = (record != nullptr) ? record->ExceptionCode : 0;
+    const void* address = (record != nullptr) ? record->ExceptionAddress : nullptr;
+    char line[256] = {0};
+    _snprintf_s(line, sizeof(line), _TRUNCATE, "FATAL(hard): code=0x%08lX (%s) addr=%p",
+                static_cast<unsigned long>(code), ExceptionCodeName(code), address);
+    NoteFatal(line);
+    WriteCrashDump(info, ExeDirectoryWide() + L"\\diw-overlay.crash.dmp");
+    // 已经留证，直接终止；不要落到 Windows 错误报告对话框上。
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+}  // namespace
+
 int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
+    ::SetUnhandledExceptionFilter(CrashFilter);
     try {
         return Run();
     } catch (const std::exception& e) {
@@ -2912,6 +3118,13 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         // 用 trunc 打开等于自己把现场擦掉。
         std::ofstream f(ExeDirectory() + "\\diw-overlay.log", std::ios::out | std::ios::app);
         f << "FATAL: " << e.what() << "\n";
+        NoteFatal((std::string("FATAL(std): ") + e.what()).c_str());
         return 2;
+    } catch (...) {
+        // 非 std::exception：表现和硬崩溃一样是「静默消失」，必须至少留一行。
+        std::ofstream f(ExeDirectory() + "\\diw-overlay.log", std::ios::out | std::ios::app);
+        f << "FATAL: unknown exception\n";
+        NoteFatal("FATAL(unknown): non-std exception thrown out of Run()");
+        return 3;
     }
 }
