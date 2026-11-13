@@ -65,7 +65,24 @@ if ($Uninstall) {
 }
 
 if (-not (Test-Path $exeSrc)) {
-    Fail "当前目录找不到 diw_overlay.exe。请把整个 zip 解压后再运行 install.cmd（不要只拷 exe）。"
+    # 这条报错以前只有一句"找不到 exe"，用户看到它只能干瞪眼。
+    # 现在把目录内容列出来 —— "缺了什么"和"被删了"是两件完全不同的事。
+    Write-Host 'ERROR: 当前目录找不到 diw_overlay.exe' -ForegroundColor Red
+    Write-Host "  期望路径：$exeSrc"
+    Write-Host '  当前目录实际内容：'
+    Get-ChildItem $srcDir -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host ("    {0,-24} {1,10:N0} 字节" -f $_.Name, $_.Length)
+    }
+    Write-Host ''
+    Write-Host '  三个常见原因，按概率排：'
+    Write-Host '   1) 杀毒软件把 diw_overlay.exe 隔离了（未签名程序从压缩包解出时很常见）'
+    Write-Host '      处理：Windows 安全中心 → 病毒和威胁防护 → 保护历史记录 → 找到它 → 允许/还原；'
+    Write-Host '            或先把解压目录加入"排除项"，再重新解压。'
+    Write-Host '   2) 解压时只拿了 install.cmd 等文本文件（exe 必须和它们在同一层目录）'
+    Write-Host '   3) 用了"仅解压选中文件"或从压缩包里直接双击运行（必须先完整解压）'
+    Write-Host ''
+    Write-Host '  正确做法：右键 zip → 全部解压缩 → 进到解压出来的文件夹 → 双击 install.cmd'
+    exit 1
 }
 
 Info "安装到 $installDir"
