@@ -1947,6 +1947,10 @@ int Run() {
     Backdrop glass_refresh;     // 可见期间的定期刷新（用 epoch 修补胶囊挡住的区域）
     Backdrop* glass_current = nullptr;  // 渲染当前用的那份
     std::int64_t glass_last_ms = -100000;
+    // 上一次「抓屏 + 缩放 + 模糊」的耗时。它**同步阻塞在主线程**上，
+    // 是"卡一下"的头号嫌疑（笔记本 150% 缩放时捕获面积是 2.25 倍）。
+    // 既写进日志，也用来把刷新间隔往后推。
+    double glass_cost_ms = 0.0;
     bool was_hidden = true;
     // 上一次捕获时的画布尺寸。画布一变（岛数变化 / 展开收起），旧 epoch 的
     // 覆盖范围就不够用了，必须重拍 —— 否则修补区右侧贴不到干净像素。
@@ -3009,8 +3013,14 @@ int Run() {
                 // 表现为「一半玻璃、一半漆黑」。实测就是这么发现的。
                 const bool size_changed = canvas_w != glass_canvas_w || canvas_h != glass_canvas_h;
                 const bool need_epoch = (glass_current == nullptr) || was_hidden || size_changed;
-                const bool need_refresh = !need_epoch && now_ms - glass_last_ms >= 2000;
+                // 抓屏是同步阻塞：一次 200ms 就够难看了，别雷打不动每 2 秒来一次。
+                // 代价超过 60ms 时按比例拉长间隔（上限 8 秒）—— 玻璃旧一点，
+                // 好过周期性冻结。
+                const std::int64_t glass_interval = static_cast<std::int64_t>(
+                    std::clamp(2000.0 + glass_cost_ms * 12.0, 2000.0, 8000.0));
+                const bool need_refresh = !need_epoch && now_ms - glass_last_ms >= glass_interval;
                 if (need_epoch || need_refresh) {
+                    const auto glass_t0 = Clock::now();
                     // 修补矩形按「当前实际窗口」算：可见期间刷新时，胶囊自己
                     // 会出现在抓屏结果里，必须用 epoch 的干净像素把它抹掉。
                     const int win_x = anchor_x(canvas_w);
@@ -3025,15 +3035,18 @@ int Run() {
                                         canvas_w + patch_pad * 2, canvas_h + patch_pad * 2,
                                         need_epoch ? nullptr : &glass_epoch);
                     glass_last_ms = now_ms;  // 失败也别每帧重试，下次整点再试
+                    glass_cost_ms =
+                        std::chrono::duration<double, std::milli>(Clock::now() - glass_t0).count();
                     if (ok) {
                         glass_current = target;
                         glass_canvas_w = canvas_w;
                         glass_canvas_h = canvas_h;
-                        char gline[240];
+                        char gline[260];
                         std::snprintf(gline, sizeof(gline),
-                                      "glass: %s %dx%d at (%d,%d) raw=%.1f blur=%.1f",
+                                      "glass: %s %dx%d at (%d,%d) raw=%.1f blur=%.1f cost=%.0fms",
                                       need_epoch ? "epoch" : "refresh", glass_w, glass_h, glass_x,
-                                      glass_y, target->MeanLuminanceRaw(), target->MeanLuminance());
+                                      glass_y, target->MeanLuminanceRaw(), target->MeanLuminance(),
+                                      glass_cost_ms);
                         note(gline);
                     } else if (need_epoch) {
                         glass_current = nullptr;  // 无桌面会话等，回落不透明样式
