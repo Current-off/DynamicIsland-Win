@@ -263,6 +263,10 @@ struct ExpandedHit {
     Gdiplus::RectF play;      // 封面 = 播放 / 暂停
     Gdiplus::RectF progress;  // 加高后的进度条命中带（可点可拖）
     Gdiplus::RectF app;       // 图标 + 标题这一块 = 打开对应的应用
+    // 走带控件（媒体专属，画在进度条上方原本空着的那条带上）
+    Gdiplus::RectF tp_back;   // −10s
+    Gdiplus::RectF tp_play;   // 播放 / 暂停
+    Gdiplus::RectF tp_fwd;    // +10s
 };
 
 inline ExpandedHit ExpandedHitAreas(const Gdiplus::RectF& pill, float scale) {
@@ -277,6 +281,19 @@ inline ExpandedHit ExpandedHitAreas(const Gdiplus::RectF& pill, float scale) {
     // 4px 的条太细，命中带上下各放 9px，鼠标不必精准落在像素上。
     h.progress = Gdiplus::RectF(pill.X + pad, bar_y - 9.0f * scale, pill.Width - pad * 2.0f,
                                 4.0f * scale + 18.0f * scale);
+    // 走带控件放在**页脚行**（与时间文字同一行），不占用新增高度：
+    // 时间文字收到左侧 30%，中间 3 个 24px 圆钮。
+    // 之前试过放在进度条上方，那里其实没有空带 —— 会压住副标题。
+    {
+        const float tb = 24.0f * scale;
+        const float tgap = 12.0f * scale;
+        const float row_w = tb * 3.0f + tgap * 2.0f;
+        const float row_x = pill.X + (pill.Width - row_w) * 0.5f;
+        const float row_y = foot_y - 12.0f * scale;
+        h.tp_back = Gdiplus::RectF(row_x, row_y, tb, tb);
+        h.tp_play = Gdiplus::RectF(row_x + tb + tgap, row_y, tb, tb);
+        h.tp_fwd = Gdiplus::RectF(row_x + (tb + tgap) * 2.0f, row_y, tb, tb);
+    }
     // 「打开应用」的命中区：图标 + 标题 + 副标题（不含封面右下角的播放角标、
     // 也不含进度条与关闭键）。用户点岛最直觉的动作就是「我要回到那个 App」，
     // 所以给这一整块留了入口，而不是只让 42px 的图标可点。
@@ -2438,10 +2455,44 @@ private:
             }
         }
 
+        // ---- 走带控件（媒体专属，画在页脚行中间）----
+        // 三个圆钮：−10s / 播放暂停 / +10s。都用已有能力（相对定位 + 播放切换），
+        // 不新增采集指令。有歌词时也不影响：它占的是页脚行，不是歌词区。
+        if (v.kind.rfind("media", 0) == 0) {
+            const Gdiplus::Color fg(Clamp8(static_cast<int>(alpha * 0.95f)), 238, 240, 246);
+            Gdiplus::SolidBrush brush(fg);
+            auto disc = [&](const Gdiplus::RectF& r, float density) {
+                FillRounded(g, r, r.Width * 0.5f,
+                            Gdiplus::Color(Clamp8(static_cast<int>(alpha * density)), 255, 255,
+                                           255));
+            };
+            disc(hit.tp_back, 0.10f);
+            disc(hit.tp_play, 0.18f);
+            disc(hit.tp_fwd, 0.10f);
+            DrawText(g, L"\u221210", hit.tp_back, 8.6f * scale, Gdiplus::FontStyleBold, fg,
+                     Gdiplus::StringAlignmentCenter);
+            DrawText(g, L"+10", hit.tp_fwd, 8.6f * scale, Gdiplus::FontStyleBold, fg,
+                     Gdiplus::StringAlignmentCenter);
+            const float cw = hit.tp_play.Width;
+            if (v.playing) {
+                g.FillRectangle(&brush, hit.tp_play.X + cw * 0.34f, hit.tp_play.Y + cw * 0.30f,
+                                2.4f * scale, cw * 0.40f);
+                g.FillRectangle(&brush, hit.tp_play.X + cw * 0.57f, hit.tp_play.Y + cw * 0.30f,
+                                2.4f * scale, cw * 0.40f);
+            } else {
+                Gdiplus::PointF tri[3] = {
+                    {hit.tp_play.X + cw * 0.38f, hit.tp_play.Y + cw * 0.28f},
+                    {hit.tp_play.X + cw * 0.38f, hit.tp_play.Y + cw * 0.72f},
+                    {hit.tp_play.X + cw * 0.72f, hit.tp_play.Y + cw * 0.50f}};
+                g.FillPolygon(&brush, tri, 3);
+            }
+        }
+
         // 页脚只留「有信息量」的那一行（时间 / 进度）。原来右边还挂着一句
         // 「点标题打开应用 · 拖进度 · × 关闭」—— 那是零信息量的噪音：
         // × 就在右上角看得见，能拖的进度条本身也长得像能拖的。
-        DrawText(g, Widen(v.meta), Gdiplus::RectF(pill.X + pad, foot_y - 8.0f * scale, bar_w,
+        DrawText(g, Widen(v.meta), Gdiplus::RectF(pill.X + pad, foot_y - 8.0f * scale,
+                                                  bar_w * 0.30f,
                                                   16.0f * scale),
                  11.0f * scale, Gdiplus::FontStyleRegular,
                  Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.98f)),

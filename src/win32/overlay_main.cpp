@@ -123,6 +123,8 @@ inline double ProgressAtX(const BoxD& bar, int x) {
 }
 struct HitState {
     BoxD close, play, progress, app;
+    // 走带控件（媒体展开态那一排）
+    BoxD tp_back, tp_play, tp_fwd;
     // 主胶囊右侧的每个小圆。以前没有这一项，点小圆会被当成「点了胶囊」，
     // 于是展开的是主活动 —— 用户报的「点小的却路由到大的」就是这个。
     std::vector<BoxD> detached;
@@ -137,6 +139,8 @@ double g_drag_progress = -1.0;  // 拖动中的预览进度（-1 = 没在拖）
 bool g_seek_req = false;
 double g_seek_progress = 0.0;
 bool g_play_req = false;
+// ±1 = 后退/前进 10 秒。名字避开已有的 g_seek_req（那个是拖进度条的）。
+int g_seek_step_req = 0;
 bool g_close_req = false;
 POINT g_press_pt = {-1, -1};
 bool g_press_in_button = false;
@@ -419,6 +423,9 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             if (g_hit.expanded && g_press_in_button) {
                 if (g_hit.close.Contains(pt.x, pt.y)) g_close_req = true;
                 else if (g_hit.play.Contains(pt.x, pt.y)) g_play_req = true;
+                else if (g_hit.tp_play.Contains(pt.x, pt.y)) g_play_req = true;
+                else if (g_hit.tp_back.Contains(pt.x, pt.y)) g_seek_step_req = -1;
+                else if (g_hit.tp_fwd.Contains(pt.x, pt.y)) g_seek_step_req = 1;
                 else if (g_hit.app.Contains(pt.x, pt.y)) g_launch_req = true;
                 g_press_in_button = false;
                 return 0;  // 按钮点击不产生普通单击（否则会顺手收起/展开）
@@ -2476,6 +2483,20 @@ int Run() {
             note("media: toggle play/pause app=" +
                  (play_app.empty() ? std::string("(current)") : play_app));
         }
+        if (g_seek_step_req != 0) {
+            const int step = g_seek_step_req;
+            g_seek_step_req = 0;
+            std::string seek_app;
+            const Frame& sf = demo.runtime->LastResult().frame;
+            if (!sf.visible.empty()) {
+                const Activity* act = LeadOf(sf, demo.expand_id);
+                seek_app = act == nullptr ? std::string()
+                                          : JsonString(act->content_json, "app_id");
+            }
+            sources.SeekRelativeMs(static_cast<std::int64_t>(step) * 10000, seek_app);
+            note(std::string("media: seek ") + (step < 0 ? "-10s" : "+10s") + " app=" +
+                 (seek_app.empty() ? std::string("(current)") : seek_app));
+        }
         if (g_launch_req) {
             g_launch_req = false;
             last_interaction_ms = now_ms;
@@ -2947,6 +2968,9 @@ int Run() {
                 const auto areas = diw::win32::ExpandedHitAreas(pill, static_cast<float>(scale));
                 g_hit.close = ToBox(areas.close);
                 g_hit.play = ToBox(areas.play);
+                g_hit.tp_back = ToBox(areas.tp_back);
+                g_hit.tp_play = ToBox(areas.tp_play);
+                g_hit.tp_fwd = ToBox(areas.tp_fwd);
                 g_hit.progress = ToBox(areas.progress);
                 g_hit.app = ToBox(areas.app);
                 g_hit.progress_draggable = has_progress;

@@ -776,7 +776,7 @@ inline ForegroundApp ForegroundAppOf() {
 // ---------------------------------------------------------------- 采集器
 
 class LiveSources {
-    enum class Command { kSeek, kTogglePlayPause };
+    enum class Command { kSeek, kTogglePlayPause, kSeekRelative };
     struct PendingCommand {
         Command cmd;
         std::int64_t value = 0;
@@ -876,6 +876,13 @@ public:
     void TogglePlayPause(const std::string& app_id = std::string()) {
         std::lock_guard<std::mutex> lock(cmd_mutex_);
         commands_.push_back({Command::kTogglePlayPause, 0, app_id});
+    }
+    // 相对跳转（±10s）。必须在这里算而不是在主循环算：主循环拿到的快照里
+    // 只有 position_ms、**没有时长**，算不出能 clamp 的上界；而采集线程本来
+    // 就要读 timeline 才能拿到当前位置，顺手就做了。
+    void SeekRelativeMs(std::int64_t delta_ms, const std::string& app_id = std::string()) {
+        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        commands_.push_back({Command::kSeekRelative, delta_ms, app_id});
     }
 
     // ---- 「用户叉掉了这条」的抑制 ----
@@ -1100,6 +1107,18 @@ private:
                         target.TryChangePlaybackPositionAsync(c.value * 10000).get();
                     if (!accepted) {
                         Log("seek: player rejected position change (unsupported) app=" +
+                            (c.app_id.empty() ? std::string("(current)") : c.app_id));
+                    }
+                } else if (c.cmd == Command::kSeekRelative) {
+                    // 相对跳转：先读当前 timeline，再定位。下界夹到 0，
+                    // 上界交给播放器（超出时长它会自己收住）。
+                    const auto timeline = target.GetTimelineProperties();
+                    const std::int64_t now_ms = timeline.Position().count() / 10000;  // 100ns → ms
+                    std::int64_t want = now_ms + c.value;
+                    if (want < 0) want = 0;
+                    const bool accepted = target.TryChangePlaybackPositionAsync(want * 10000).get();
+                    if (!accepted) {
+                        Log("seek: player rejected relative seek app=" +
                             (c.app_id.empty() ? std::string("(current)") : c.app_id));
                     }
                 } else {
