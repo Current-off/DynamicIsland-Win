@@ -2480,14 +2480,15 @@ int Run() {
                 const auto& act = *LeadOf(f, demo.expand_id);
                 if (act.kind.rfind("agent", 0) == 0) {
                     // Agent 不是「打开应用」，而是「切到它在的那个窗口」。
-                    // 找不到窗口（终端标题被改过 / 跑在 SSH 里）就退一步打开项目目录。
+                    // 找不到窗口时**不再退化成打开项目目录**：用户点的是岛，
+                    // 期待的是回到那个会话，而不是让资源管理器弹出来盖住半个屏幕
+                    //（实机反馈："agent 点击进去是文件夹"）。找不到就什么都不做，
+                    // 只记一行日志，让人能从日志判断是标题匹配不上还是真没窗口。
                     const std::string project = act.title;
                     const std::string provider = JsonString(act.content_json, "provider");
-                    const std::string cwd = JsonString(act.content_json, "cwd");
                     const bool focused = FocusAgentWindow(hwnd, project, provider);
-                    if (!focused) OpenFolderInExplorer(cwd);
                     note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] focus agent \"" +
-                         project + "\"" + (focused ? " ok" : " (no window, opened folder)"));
+                         project + "\"" + (focused ? " ok" : " (no matching window, no-op)"));
                     last_interaction_ms = now_ms;
                 } else if (act.kind.rfind("editor", 0) == 0) {
                     // 编辑器：把它拉回前台。找窗口用「exe 名」而不是文件名 ——
