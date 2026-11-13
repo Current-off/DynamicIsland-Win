@@ -46,11 +46,10 @@ struct Layout {
     static constexpr float kCompactH = 46.0f;
     static constexpr float kExpandedW = 420.0f;
     static constexpr float kExpandedH = 124.0f;       // 带进度条（媒体/下载）
-    static constexpr float kExpandedShortH = 96.0f;   // 无进度条（复制/通知/设备）
-    // 日历只有「图标 + 标题 + 时间地点」三行，且没有页脚与操作区。
-    // 用 96 会空出下面三分之一（实机反馈"大岛下方太空"）；按内容实测收到 80，
-    // 上下各留 16 的 margin 后刚好贴满。
-    static constexpr float kCalendarExpandedH = 80.0f;
+    // 通用短档：无进度条、无列表、无页脚的展开态（通知 / 剪贴板 / 电量 /
+    // 音量 / 设备 / 日历）。结构都是「42px 图标 + 标题 + 副标题」，
+    // 实测 96 会让底部空出三分之一；按内容需要收到 80（45 内容 + 上下各 16 margin）。
+    static constexpr float kExpandedShortH = 80.0f;
     static constexpr float kExpandedLyricH = 196.0f;  // 媒体展开态：额外容纳三行歌词
     // 编码 Agent 展开态：标题 + 任务 + 当前动作 + 清单（最多 4 行）+ 页脚。
     // 高度按「实际有几行」算（kAgentBaseH + n*kAgentRowH）：只有 3 条清单时

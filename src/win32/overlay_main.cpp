@@ -1274,10 +1274,6 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
                 view.content_h = Layout::kEditorExpandedH;
             } else if (lyric_zone) {
                 view.content_h = Layout::kExpandedLyricH;
-            } else if (lead_ptr != nullptr &&
-                       lead_ptr->activity.kind.rfind("calendar", 0) == 0) {
-                // 日历没有进度条也没有页脚，用通用短档(96)仍会空出下面一截。
-                view.content_h = Layout::kCalendarExpandedH;
             } else if (ParseProgress(lead_ptr == nullptr ? std::string()
                                                          : lead_ptr->activity.content_json) >= 0.0) {
                 view.content_h = Layout::kExpandedH;
