@@ -202,11 +202,22 @@ inline std::int64_t Iso8601ToMs(const std::string& in) {
 
     std::int64_t out = days * 86400000LL + (h * 3600LL + mi * 60LL + se) * 1000LL + ms;
     // 时区偏移："+08:00" 表示本地时间比 UTC 早 8 小时，换算成 UTC 要减。
-    if (in.size() >= 25 && (in[19] == '+' || in[19] == '-') && in[22] == ':') {
-        const int oh = std::atoi(in.substr(20, 2).c_str());
-        const int om = std::atoi(in.substr(23, 2).c_str());
+    // 位置不能写死成 19：带小数秒时 19 位是 '.'，时区落在 23 位之后。
+    // 原来只看 in[19]，于是 "…T06:12:37.123+08:00" 被当 UTC 解析 ——
+    // last_event_ms 落到未来 8 小时，会话停了仍显示"运行中"（issue #2 第 5 条）。
+    std::size_t tz = std::string::npos;
+    for (std::size_t p = 19; p < in.size(); ++p) {
+        if (in[p] == '+' || in[p] == '-') {
+            tz = p;
+            break;
+        }
+        if (in[p] == 'Z' || in[p] == 'z') break;  // UTC，无偏移
+    }
+    if (tz != std::string::npos && tz + 5 < in.size() && in[tz + 3] == ':') {
+        const int oh = std::atoi(in.substr(tz + 1, 2).c_str());
+        const int om = std::atoi(in.substr(tz + 4, 2).c_str());
         const std::int64_t offset = (oh * 3600LL + om * 60LL) * 1000LL;
-        out += (in[19] == '+') ? -offset : offset;
+        out += (in[tz] == '+') ? -offset : offset;
     }
     return out;
 }
@@ -256,7 +267,11 @@ inline bool IsGenericProjectName(const std::string& name) {
     for (const char c : name) {
         if (c >= '0' && c <= '9') {
             ++digits;
-        } else if (c == '-' || c == '_' || c == '.' || c == 'T' || c == 'Z' || c == 't') {
+        } else if (c == '-' || c == '_' || c == '.' || c == 'T' || c == 'Z' || c == 't' ||
+                   // 十六进制字母必须计入：uuid 去掉横线全是 [0-9a-f]，
+                   // 原来只认数字与分隔符，含字母的 32 位 uuid 永远判不出来
+                   //（issue #2 第 10 条），注释里写的语义是落空的。
+                   (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
             ++marks;
         }
     }

@@ -47,6 +47,17 @@ void TestMiniJson() {
     json::Value unicode;
     CHECK(json::Parse(R"({"t":"\u4f60\u597d"})", unicode, nullptr));
     CHECK(unicode.At("t").AsString() == "你好");
+
+    // NaN / inf / 十六进制：strtod 都接受，但都不是 JSON 数字。
+    // NaN 最危险——它会经 IPC 的 relevanceScore 进排序比较器，
+    // 破坏严格弱序导致 std::sort UB（issue #2 第 1 条）。
+    json::Value bad_num;
+    CHECK(!json::Parse(R"({"score":NaN})", bad_num, nullptr));
+    CHECK(!json::Parse(R"({"score":inf})", bad_num, nullptr));
+    CHECK(!json::Parse(R"({"score":0x10})", bad_num, nullptr));
+    // 合法数字不能被误伤
+    CHECK(json::Parse(R"({"score":-1.5e3})", bad_num, nullptr));
+    CHECK(bad_num.At("score").AsDouble(0.0) == -1500.0);
 }
 
 void TestExtensionAndClock() {

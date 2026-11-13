@@ -71,6 +71,10 @@ void TestIso8601() {
     CHECK(Iso8601ToMs("2024-01-01T00:00:00Z") == 1704067200000LL);
     // 带 +08:00 的同一时刻，字符串写法不同，结果必须相同。
     CHECK(Iso8601ToMs("2024-01-01T08:00:00+08:00") == 1704067200000LL);
+    // 小数秒 + 时区同时出现：这是原实现漏掉时区的形态（issue #2 第 5 条）。
+    // 19 位是 '.'，时区在 23 位之后；只查 in[19] 就永远不会减偏移，差整 8 小时。
+    CHECK(Iso8601ToMs("2024-01-01T08:00:00.000+08:00") == 1704067200000LL);
+    CHECK(Iso8601ToMs("2024-01-01T08:00:00.123+08:00") == 1704067200123LL);
     CHECK(Iso8601ToMs("2024-01-01") == 1704067200000LL);
     CHECK(Iso8601ToMs("") == 0);
     CHECK(Iso8601ToMs("not-a-date") == 0);
@@ -98,6 +102,9 @@ void TestTextHelpers() {
     // 时间戳式目录名对用户没有信息量，会被换成会话标题（见 live_mapping）。
     CHECK(diw::IsGenericProjectName("2026-11-12-14-12-37"));
     CHECK(diw::IsGenericProjectName("20261112"));
+    // 32 位 hex（uuid 去横线）：含 a-f 字母，原来判不出来，会被当标题直接显示
+    CHECK(diw::IsGenericProjectName("d3b07384d9ed4c1c9f2b4c1e2f3a4b5c"));
+    CHECK(diw::IsGenericProjectName("d3b07384-d9ed-4c1c-9f2b-4c1e2f3a4b5c"));
     CHECK(!diw::IsGenericProjectName("DynamicIsland-Win"));
     CHECK(!diw::IsGenericProjectName("api-server"));
     CHECK(!diw::IsGenericProjectName(""));

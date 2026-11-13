@@ -542,7 +542,10 @@ inline LiveActivities BuildActivities(const Snapshot& s, std::int64_t now_ms, in
                 preview = "疑似敏感内容，已隐藏";
                 secret = true;
             } else if (static_cast<int>(preview.size()) > cfg.clipboard.max_chars) {
-                preview = preview.substr(0, static_cast<std::size_t>(cfg.clipboard.max_chars)) + "…";
+                // 必须按**字符**截断：substr 用的是字节数，落点会切在多字节字符中间，
+                // 产出非法 UTF-8，渲染层转 UTF-16 就是 U+FFFD 方框（issue #2 第 8 条）。
+                // EllipsizeUtf8 就是为这件事写的，别绕开它。
+                preview = EllipsizeUtf8(preview, static_cast<std::size_t>(cfg.clipboard.max_chars));
             }
 
             a.content_json = "{\"text\":" + detail::Quote(preview) + ",\"clip_kind\":" +

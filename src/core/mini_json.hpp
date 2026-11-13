@@ -11,6 +11,7 @@
 #ifndef DIW_SRC_CORE_MINI_JSON_HPP
 #define DIW_SRC_CORE_MINI_JSON_HPP
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -171,12 +172,29 @@ private:
 
     bool ParseNumber(Value& out) {
         const char* begin = text_.c_str() + offset_;
+        // JSON 的数字必须以 '-' 或数字开头。strtod 还额外接受 "+1"、"0x10"、
+        // "NaN"、"inf" —— 其中 NaN 最危险：它会经 IPC 的 relevanceScore 一路进
+        // 排序比较器，NaN 对任何元素两个方向都返回 false，破坏严格弱序 → std::sort UB
+        //（issue #2 第 1 条）。
+        if (*begin != '-' && (*begin < '0' || *begin > '9')) return Fail("bad number");
         char* end = nullptr;
         const double value = std::strtod(begin, &end);
         if (end == begin) return Fail("bad number");
+        // 再看一遍**实际消费掉的那段字符**：strtod 还接受 0x10（十六进制）与
+        // NaN/inf。JSON 数字只允许 [0-9+-.eE]，出现别的字符一律拒绝
+        //（issue #2 第 1 条的另一半：只卡首字符挡不住 0x10）。
+        const std::size_t consumed = static_cast<std::size_t>(end - begin);
+        for (std::size_t i = 0; i < consumed; ++i) {
+            const char ch = begin[i];
+            const bool digit = ch >= '0' && ch <= '9';
+            if (!digit && ch != '-' && ch != '+' && ch != '.' && ch != 'e' && ch != 'E') {
+                return Fail("bad number");
+            }
+        }
+        if (!std::isfinite(value)) return Fail("non-finite number");
         out.type = Value::Type::Number;
         out.number = value;
-        offset_ += static_cast<std::size_t>(end - begin);
+        offset_ += consumed;
         return true;
     }
 

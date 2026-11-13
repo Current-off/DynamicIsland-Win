@@ -128,7 +128,9 @@ inline void CollectAgentFiles(const std::wstring& dir, const std::wstring& ext, 
         const std::wstring tail = name.substr(name.size() - ext.size());
         if (::CompareStringOrdinal(tail.c_str(), -1, ext.c_str(), -1, TRUE) != CSTR_EQUAL) continue;
         out->push_back(full);
-        if (out->size() >= 400) return;  // 单人机器不可能同时跑 400 个会话
+        // break 而不是 return：return 会跳过循环外的 FindClose，
+        // 在 ≥400 个会话文件的机器上每 3 秒漏一个句柄（issue #2 第 11 条）。
+        if (out->size() >= 400) break;  // 单人机器不可能同时跑 400 个会话
     } while (::FindNextFileW(find, &fd) != FALSE);
     ::FindClose(find);
 }
@@ -259,17 +261,25 @@ public:
             if (st.size - from > kMaxCatchUpBytes) from = st.size - kMaxCatchUpBytes;
             std::string chunk = ReadFileRange(f.path, from, st.size - from, nullptr);
             if (chunk.empty()) continue;
+            // base 是「chunk[0] 在文件里的绝对偏移」。跳过不完整行时会擦掉一段，
+            // 基准必须跟着前移，否则下一拍从早 (nl+1) 字节处重读，本轮已消费的行
+            // 会被再解析一遍 —— 表现为 timeline / tool_calls 重复累计（issue #2 第 3a 条）。
+            std::uint64_t base = from;
             if (from != f.offset) {
                 // 从中间切进去：丢掉第一个不完整的行。
                 const std::size_t nl = chunk.find('\n');
                 if (nl == std::string::npos) continue;
                 chunk.erase(0, nl + 1);
+                base = from + nl + 1;
             }
-            ConsumeLines(f, chunk);
-            // 只保留到最后一个换行，剩下的半行留到下一拍（不然会解析失败并丢掉）。
+            // 只喂到最后一个换行为止：剩下的半行留到下一拍。
+            // 否则尾部半行本拍被当成完整行解析一次、下一拍再解析一次
+            //（写入端「先 flush 正文、换行随下次写入落地」是常态）—— 第 3b 条。
             const std::size_t last_nl = chunk.rfind('\n');
-            const std::uint64_t consumed = last_nl == std::string::npos ? 0 : last_nl + 1;
-            f.offset = from + consumed;
+            if (last_nl == std::string::npos) continue;  // 这次连一行完整都没有
+            chunk.resize(last_nl + 1);
+            ConsumeLines(f, chunk);
+            f.offset = base + chunk.size();
         }
         Publish(now_ms);
     }
