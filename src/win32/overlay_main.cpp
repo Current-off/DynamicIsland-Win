@@ -1951,6 +1951,9 @@ int Run() {
     // 是"卡一下"的头号嫌疑（笔记本 150% 缩放时捕获面积是 2.25 倍）。
     // 既写进日志，也用来把刷新间隔往后推。
     double glass_cost_ms = 0.0;
+    // 画布尺寸最近一次变化的时间。动画期间尺寸每帧都在变，
+    // 而 epoch 的触发条件是「尺寸变了」——不加防抖就等于每帧重抓一次全屏。
+    std::int64_t size_changed_ms = -100000;
     bool was_hidden = true;
     // 上一次捕获时的画布尺寸。画布一变（岛数变化 / 展开收起），旧 epoch 的
     // 覆盖范围就不够用了，必须重拍 —— 否则修补区右侧贴不到干净像素。
@@ -3012,7 +3015,20 @@ int Run() {
                 // 右侧贴不到干净像素，只能拿抓屏结果顶上 —— 那里面有胶囊自己，
                 // 表现为「一半玻璃、一半漆黑」。实测就是这么发现的。
                 const bool size_changed = canvas_w != glass_canvas_w || canvas_h != glass_canvas_h;
-                const bool need_epoch = (glass_current == nullptr) || was_hidden || size_changed;
+                if (size_changed) size_changed_ms = now_ms;
+                // epoch 必须**等几何稳定**再抓，不能「一变就抓」。
+                // 展开/收起是弹簧动画，canvas 尺寸每帧都不同；按「变了就抓」
+                // 实测 8 秒触发 37 次（issue #1 实测笔记本上 27 次 × 约 100ms
+                // = 三分之一墙钟时间阻塞在抓屏上），表现就是整段动画不跟手。
+                // 稳定 300ms 后抓一次，期间继续用旧纹理（按位置采样，只是
+                // 边缘可能露出一点旧内容，远好过每帧卡 100ms）。
+                const bool geometry_settled = (now_ms - size_changed_ms) >= 300;
+                // 兜底：尺寸若持续不稳（某种一直在变的动画），防抖会永远等不到，
+                // 玻璃就一直是旧的。超过 2 秒就强制抓一次，宁可卡一下。
+                const bool force_epoch = (now_ms - glass_last_ms) >= 2000 && size_changed;
+                const bool need_epoch = (glass_current == nullptr) ||
+                                        ((was_hidden || size_changed) &&
+                                         (geometry_settled || force_epoch));
                 // 抓屏是同步阻塞：一次 200ms 就够难看了，别雷打不动每 2 秒来一次。
                 // 代价超过 60ms 时按比例拉长间隔（上限 8 秒）—— 玻璃旧一点，
                 // 好过周期性冻结。
@@ -3041,15 +3057,23 @@ int Run() {
                         glass_current = target;
                         glass_canvas_w = canvas_w;
                         glass_canvas_h = canvas_h;
-                        char gline[260];
+                        char gline[280];
                         std::snprintf(gline, sizeof(gline),
-                                      "glass: %s %dx%d at (%d,%d) raw=%.1f blur=%.1f cost=%.0fms",
+                                      "glass: %s %dx%d at (%d,%d) raw=%.1f blur=%.1f cost=%.1fms",
                                       need_epoch ? "epoch" : "refresh", glass_w, glass_h, glass_x,
                                       glass_y, target->MeanLuminanceRaw(), target->MeanLuminance(),
                                       glass_cost_ms);
                         note(gline);
-                    } else if (need_epoch) {
-                        glass_current = nullptr;  // 无桌面会话等，回落不透明样式
+                    } else {
+                        // 失败也要记耗时与原因：只记成功样本会**系统性低估最坏情况**
+                        // （抓屏被拒时一样会阻塞，只是没产出纹理）。
+                        char gline[160];
+                        std::snprintf(gline, sizeof(gline),
+                                      "glass: %s FAILED %dx%d cost=%.1fms（无桌面会话/抓屏被拒）",
+                                      need_epoch ? "epoch" : "refresh", glass_w, glass_h,
+                                      glass_cost_ms);
+                        note(gline);
+                        if (need_epoch) glass_current = nullptr;  // 回落不透明样式
                     }
                 }
             } else {
