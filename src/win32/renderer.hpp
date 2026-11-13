@@ -769,11 +769,11 @@ private:
         const bool use_glass = mode != 2 && glass.backdrop != nullptr;
         if (use_glass) {
             DrawGlassBody(g, path, r, alpha, glass);
-            DrawRim(g, path, r, alpha, scale, true);
+            DrawRim(g, path, r, alpha, scale, true, radius);
             DrawInnerRim(g, r, radius, alpha, scale, true);
         } else {
             DrawOpaqueBody(g, path, r, alpha);
-            DrawRim(g, path, r, alpha, scale, false);
+            DrawRim(g, path, r, alpha, scale, false, radius);
             DrawInnerRim(g, r, radius, alpha, scale, false);
         }
     }
@@ -1053,7 +1053,8 @@ private:
     // glassy：玻璃款的顶边要更亮更"锐"（真实玻璃边缘会折射出一条亮线），
     // 不透明款保持原来的低调边，否则深色胶囊会像镀了铬。
     static void DrawRim(Gdiplus::Graphics& g, const Gdiplus::GraphicsPath& path,
-                        const Gdiplus::RectF& r, BYTE alpha, float scale, bool glassy) {
+                        const Gdiplus::RectF& r, BYTE alpha, float scale, bool glassy,
+                        float radius) {
         const BYTE solid = Clamp8(static_cast<int>(alpha * 0.97f));
         Gdiplus::LinearGradientBrush rim(
             Gdiplus::PointF(r.X, r.Y), Gdiplus::PointF(r.X, r.Y + r.Height),
@@ -1068,10 +1069,19 @@ private:
             at[1] = 0.16f;
             at[2] = 0.52f;
         } else {
-            stops[0] = Gdiplus::Color(solid, 78, 78, 90);
-            stops[1] = Gdiplus::Color(solid, 40, 40, 48);
-            stops[2] = Gdiplus::Color(solid, 16, 16, 21);
+            // 亮区长度按**圆角半径**算，不写死百分比。
+            // 它是竖直渐变，圆角弧线正好穿过 0..radius 这一段；原先 0.20 处
+            // 就掉到 40/78，于是同一圈描边在顶边是亮的、绕过圆角就暗成 38，
+            // 看起来像"边框走到圆角就断了"。亮区覆盖整个圆角（×1.25 留余量）
+            // 之后，弧线与直边的亮度才接得上。
+            const float bright =
+                std::clamp((radius * 1.25f) / std::max(1.0f, r.Height), 0.18f, 0.46f);
+            stops[0] = Gdiplus::Color(solid, 82, 82, 94);
+            stops[1] = Gdiplus::Color(solid, 68, 68, 80);
+            stops[2] = Gdiplus::Color(solid, 18, 18, 23);
             stops[3] = Gdiplus::Color(solid, 9, 9, 12);
+            at[1] = bright;
+            at[2] = std::min(1.0f, bright + 0.36f);
         }
         rim.SetInterpolationColors(stops, at, 4);
         // 描边宽度跟着胶囊尺寸走，不能写死。写死 1.5*scale 时：紧凑态(46 高)
