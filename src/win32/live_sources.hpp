@@ -776,7 +776,7 @@ inline ForegroundApp ForegroundAppOf() {
 // ---------------------------------------------------------------- 采集器
 
 class LiveSources {
-    enum class Command { kSeek, kTogglePlayPause, kSeekRelative };
+    enum class Command { kSeek, kTogglePlayPause, kSeekRelative, kSkipNext, kSkipPrev };
     struct PendingCommand {
         Command cmd;
         std::int64_t value = 0;
@@ -883,6 +883,16 @@ public:
     void SeekRelativeMs(std::int64_t delta_ms, const std::string& app_id = std::string()) {
         std::lock_guard<std::mutex> lock(cmd_mutex_);
         commands_.push_back({Command::kSeekRelative, delta_ms, app_id});
+    }
+    // 上一首 / 下一首。并非所有应用都实现（视频播放器通常没有曲目概念），
+    // 返回值由执行端检查，不支持时只记一行日志。
+    void SkipNext(const std::string& app_id = std::string()) {
+        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        commands_.push_back({Command::kSkipNext, 0, app_id});
+    }
+    void SkipPrev(const std::string& app_id = std::string()) {
+        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        commands_.push_back({Command::kSkipPrev, 0, app_id});
     }
 
     // ---- 「用户叉掉了这条」的抑制 ----
@@ -1119,6 +1129,18 @@ private:
                     const bool accepted = target.TryChangePlaybackPositionAsync(want * 10000).get();
                     if (!accepted) {
                         Log("seek: player rejected relative seek app=" +
+                            (c.app_id.empty() ? std::string("(current)") : c.app_id));
+                    }
+                } else if (c.cmd == Command::kSkipNext) {
+                    const bool accepted = target.TrySkipNextAsync().get();
+                    if (!accepted) {
+                        Log("skip: player rejected next app=" +
+                            (c.app_id.empty() ? std::string("(current)") : c.app_id));
+                    }
+                } else if (c.cmd == Command::kSkipPrev) {
+                    const bool accepted = target.TrySkipPreviousAsync().get();
+                    if (!accepted) {
+                        Log("skip: player rejected previous app=" +
                             (c.app_id.empty() ? std::string("(current)") : c.app_id));
                     }
                 } else {

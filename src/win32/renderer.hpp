@@ -263,10 +263,12 @@ struct ExpandedHit {
     Gdiplus::RectF play;      // 封面 = 播放 / 暂停
     Gdiplus::RectF progress;  // 加高后的进度条命中带（可点可拖）
     Gdiplus::RectF app;       // 图标 + 标题这一块 = 打开对应的应用
-    // 走带控件（媒体专属，画在进度条上方原本空着的那条带上）
+    // 走带控件（媒体专属，画在页脚行中间）
+    Gdiplus::RectF tp_prev;   // 上一首
     Gdiplus::RectF tp_back;   // −10s
     Gdiplus::RectF tp_play;   // 播放 / 暂停
     Gdiplus::RectF tp_fwd;    // +10s
+    Gdiplus::RectF tp_next;   // 下一首
 };
 
 inline ExpandedHit ExpandedHitAreas(const Gdiplus::RectF& pill, float scale) {
@@ -286,13 +288,15 @@ inline ExpandedHit ExpandedHitAreas(const Gdiplus::RectF& pill, float scale) {
     // 之前试过放在进度条上方，那里其实没有空带 —— 会压住副标题。
     {
         const float tb = 24.0f * scale;
-        const float tgap = 12.0f * scale;
-        const float row_w = tb * 3.0f + tgap * 2.0f;
+        const float tgap = 10.0f * scale;
+        const float row_w = tb * 5.0f + tgap * 4.0f;
         const float row_x = pill.X + (pill.Width - row_w) * 0.5f;
         const float row_y = foot_y - 12.0f * scale;
-        h.tp_back = Gdiplus::RectF(row_x, row_y, tb, tb);
-        h.tp_play = Gdiplus::RectF(row_x + tb + tgap, row_y, tb, tb);
-        h.tp_fwd = Gdiplus::RectF(row_x + (tb + tgap) * 2.0f, row_y, tb, tb);
+        h.tp_prev = Gdiplus::RectF(row_x, row_y, tb, tb);
+        h.tp_back = Gdiplus::RectF(row_x + (tb + tgap), row_y, tb, tb);
+        h.tp_play = Gdiplus::RectF(row_x + (tb + tgap) * 2.0f, row_y, tb, tb);
+        h.tp_fwd = Gdiplus::RectF(row_x + (tb + tgap) * 3.0f, row_y, tb, tb);
+        h.tp_next = Gdiplus::RectF(row_x + (tb + tgap) * 4.0f, row_y, tb, tb);
     }
     // 「打开应用」的命中区：图标 + 标题 + 副标题（不含封面右下角的播放角标、
     // 也不含进度条与关闭键）。用户点岛最直觉的动作就是「我要回到那个 App」，
@@ -2466,9 +2470,25 @@ private:
                             Gdiplus::Color(Clamp8(static_cast<int>(alpha * density)), 255, 255,
                                            255));
             };
+            disc(hit.tp_prev, 0.10f);
             disc(hit.tp_back, 0.10f);
             disc(hit.tp_play, 0.18f);
             disc(hit.tp_fwd, 0.10f);
+            disc(hit.tp_next, 0.10f);
+            // 上一首/下一首：竖条 + 三角，26px 下比用 ⏮ ⏭ 字形稳定得多
+            //（那些码位在雅黑里经常缺字，会变成方块）。
+            auto skip_glyph = [&](const Gdiplus::RectF& r, bool to_left) {
+                const float w2 = r.Width;
+                g.FillRectangle(&brush, to_left ? r.X + w2 * 0.24f : r.X + w2 * 0.70f,
+                                r.Y + w2 * 0.30f, 1.8f * scale, w2 * 0.40f);
+                Gdiplus::PointF t[3] = {
+                    {r.X + w2 * (to_left ? 0.66f : 0.34f), r.Y + w2 * 0.29f},
+                    {r.X + w2 * (to_left ? 0.66f : 0.34f), r.Y + w2 * 0.71f},
+                    {r.X + w2 * (to_left ? 0.38f : 0.62f), r.Y + w2 * 0.50f}};
+                g.FillPolygon(&brush, t, 3);
+            };
+            skip_glyph(hit.tp_prev, true);
+            skip_glyph(hit.tp_next, false);
             DrawText(g, L"\u221210", hit.tp_back, 8.6f * scale, Gdiplus::FontStyleBold, fg,
                      Gdiplus::StringAlignmentCenter);
             DrawText(g, L"+10", hit.tp_fwd, 8.6f * scale, Gdiplus::FontStyleBold, fg,
