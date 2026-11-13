@@ -27,6 +27,36 @@ jobs:
         shell: pwsh
         run: ./tools/build.ps1
 
+      # 单元测试覆盖不到"程序能不能起来、能不能把画面画出来"。
+      # 这里跑一次离屏快照：它不需要交互式桌面（只用 --snapshot，不用 --grab），
+      # 因此在 runner 上可跑；产物同时作为每次提交的视觉留档。
+      - name: Startup + offscreen render smoke
+        shell: pwsh
+        run: |
+          $exe = "build/cpp/diw_overlay.exe"
+          $snap = "build/snap_ci.png"
+          $p = Start-Process -FilePath $exe -PassThru -Wait -ArgumentList @(
+            "--script", "--no-hud", "--opacity=2", "--anchor=1",
+            "--duration=2600", "--snapshot=$snap", "--snapshot-at=1700",
+            "--log=build/ci_smoke.log"
+          )
+          if ($p.ExitCode -ne 0) { throw "overlay exited with $($p.ExitCode)" }
+          if (-not (Test-Path $snap)) { throw "snapshot not produced: $snap" }
+          $len = (Get-Item $snap).Length
+          if ($len -lt 5120) { throw "snapshot too small ($len bytes) - render likely blank" }
+          "snapshot ok: $len bytes"
+          if (Test-Path build/ci_smoke.log) { Get-Content build/ci_smoke.log -Tail 20 }
+
+      # 崩溃兜底会写独立的 crash 日志；CI 上出现它说明有真问题，不能只当 warning。
+      - name: Fail on crash log
+        shell: pwsh
+        run: |
+          $crash = "build/cpp/diw-overlay.crash.log"
+          if (Test-Path $crash) {
+            Get-Content $crash
+            throw "crash log produced during CI smoke run"
+          }
+
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
@@ -34,6 +64,8 @@ jobs:
           path: |
             build/cpp/diw_overlay.exe
             build/cpp/*_tests.exe
+            build/snap_ci.png
+            build/ci_smoke.log
           if-no-files-found: error
 
   # 平台无关的核心域（Python 参考实现 + 跨语言契约）。

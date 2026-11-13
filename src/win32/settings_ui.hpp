@@ -259,10 +259,9 @@ inline void Segment(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int count, i
             }
             text_x = ix + 26.0f * scale;
         }
-        static const wchar_t* kLabels[3][3] = {
+        static const wchar_t* kLabels[2][3] = {
             {L"液态玻璃", L"均衡", L"不透明"},
             {L"靠左", L"居中", L"靠右"},
-            {L"", L"", L""},
         };
         const wchar_t* label = (icon == SegIcon::Opacity) ? kLabels[0][i]
                               : (icon == SegIcon::Anchor) ? kLabels[1][i]
@@ -691,7 +690,9 @@ inline void Paint(State& st, HDC dc, int width, int height) {
         stepper(*rc_qtd, *rc_qti, st.cfg.quiet.to_min, Hit::QuietToDec, Hit::QuietToInc);
         const float mid = (static_cast<float>(rc_qfi->right) + static_cast<float>(rc_qtd->left)) *
                           0.5f;
-        Text(g, st.cfg.quiet.enabled ? L"到" : L"到",
+        // 两段时间之间的「到」是分隔符，与开关状态无关（原先写成
+        // enabled ? L"到" : L"到"，两个分支相同，属于误留的三元）。
+        Text(g, L"到",
              Gdiplus::RectF(mid - 12.0f * scale, static_cast<float>(rc_qfd->top), 24.0f * scale,
                             static_cast<float>(rc_qfd->bottom - rc_qfd->top)),
              10.0f * scale, false, Rgba(150, color::kSubR, color::kSubG, color::kSubB),

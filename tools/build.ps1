@@ -1,4 +1,4 @@
-# 一键构建（Windows / MSVC，不需要开发者命令行）
+﻿# 一键构建（Windows / MSVC，不需要开发者命令行）
 #
 #   powershell -ExecutionPolicy Bypass -File tools\build.ps1
 #

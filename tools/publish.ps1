@@ -1,4 +1,4 @@
-# 发布到 GitHub
+﻿# 发布到 GitHub
 #
 #   powershell -ExecutionPolicy Bypass -File tools\publish.ps1 -RepoUrl https://github.com/<你>/<仓库>.git
 #

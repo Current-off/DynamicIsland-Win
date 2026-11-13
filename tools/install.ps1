@@ -1,4 +1,4 @@
-# 安装 / 卸载
+﻿# 安装 / 卸载
 #
 #   安装： powershell -ExecutionPolicy Bypass -File tools\install.ps1
 #   自启： powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Autostart
