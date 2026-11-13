@@ -40,6 +40,8 @@ namespace win32 {
 class IpcServer {
 public:
     static constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\DynamicIslandWin-v1";
+    // 未消费请求的上限。见 HandleOne 里的注释：这是防止本机进程 Flood 的一道闸。
+    static constexpr std::size_t kMaxQueued = 256;
 
     IpcServer() = default;
     ~IpcServer() { Stop(); }
@@ -62,8 +64,31 @@ public:
         // OVERLAPPED + 事件对象简单得多，而这台机器上只会有我们自己连。
         HANDLE wake = ::CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                                     OPEN_EXISTING, 0, nullptr);
+        const DWORD wake_err = (wake == INVALID_HANDLE_VALUE) ? ::GetLastError() : 0;
         if (wake != INVALID_HANDLE_VALUE) ::CloseHandle(wake);
-        if (worker_.joinable()) worker_.join();
+        if (!worker_.joinable()) return;
+        // 上面那招有前提：当前没有别的客户端连着。若某个客户端「连上却不发/不读」，
+        // 工作线程会卡在 ReadFile 或 FlushFileBuffers 里，wake 连不进来，
+        // join() 就永久阻塞 —— 实测就是这个现象（进程退不掉）。
+        // CancelSynchronousIo 只取消**当前那一次**同步 I/O，所以要反复取消：
+        // 线程可能刚被从 ReadFile 里救出来，又卡进 FlushFileBuffers。
+        const HANDLE worker_handle = reinterpret_cast<HANDLE>(worker_.native_handle());
+        for (int i = 0; i < 25 && !worker_done_.load(); ++i) {
+            ::CancelSynchronousIo(worker_handle);
+            ::Sleep(16);
+        }
+        Log("ipc: stop wake_err=" + std::to_string(wake_err) +
+            " done=" + std::to_string(worker_done_.load() ? 1 : 0));
+        if (worker_done_.load()) {
+            worker_.join();
+            Log("ipc: stopped");
+        } else {
+            // 极端情况：客户端既不发也不读，线程仍卡在管道 I/O 上。
+            // 此时 join 会让进程永远退不掉，比「泄漏一个正在退出的线程」更糟。
+            // 进程紧随其后就结束了，detach 的线程随之消失。
+            worker_.detach();
+            Log("ipc: stop timeout, thread detached (process exiting)");
+        }
     }
 
     // 主循环每帧调一次：把攒下的请求整体取走（不阻塞）。
@@ -104,9 +129,13 @@ private:
                 continue;
             }
             HandleOne(pipe);
+            Log("ipc: handled, disconnecting");
             ::DisconnectNamedPipe(pipe);
+            Log("ipc: disconnected");
             ::CloseHandle(pipe);
         }
+        worker_done_.store(true);
+        Log("ipc: loop exit");
     }
 
     void HandleOne(HANDLE pipe) {
@@ -115,7 +144,10 @@ private:
         bool complete = false;
         for (;;) {
             DWORD got = 0;
-            if (!::ReadFile(pipe, buf, sizeof(buf), &got, nullptr) || got == 0) break;
+            if (!::ReadFile(pipe, buf, sizeof(buf), &got, nullptr) || got == 0) {
+                Log("ipc: read end, err=" + std::to_string(::GetLastError()));
+                break;
+            }
             for (DWORD i = 0; i < got; ++i) {
                 if (buf[i] == '\n') {
                     complete = true;
@@ -150,6 +182,15 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
+            // 队列上限：主循环每帧都会 TakeAll，正常流程攒不下几条。
+            // 但本机**任意进程**都能往管道里 Flood —— 一个写错的脚本循环推 10 万条，
+            // 这里原本没有任何上限，内存会被吃光，表现为岛突然膨胀然后被杀。
+            if (queue_.size() >= kMaxQueued) {
+                ++rejected_;
+                Respond(pipe, false, "queue full");
+                Log("ipc: reject (queue full)");
+                return;
+            }
             queue_.push_back(request);
         }
         ++accepted_;
@@ -161,7 +202,10 @@ private:
                               : ("{\"ok\":false,\"error\":" + json::Quote(error) + "}\n");
         DWORD written = 0;
         ::WriteFile(pipe, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
-        // 客户端用 ReadAll 读到 EOF 才拿得到完整内容，所以先 flush 再断开。
+        // 必须 flush：客户端靠 ReadAll 读到 EOF 才拿得到完整内容，
+        // 不 flush 时实测收到 0 字节（响应丢在管道缓冲里）。
+        // 代价是：客户端「连上却不读」时这里会阻塞 —— 由 Stop() 的
+        // 反复 CancelSynchronousIo + 超时 detach 兜住，见 Stop() 的注释。
         ::FlushFileBuffers(pipe);
     }
 
@@ -172,6 +216,8 @@ private:
     std::atomic<std::uint64_t> rejected_{0};
     std::mutex queue_mutex_;
     std::vector<ipc::Request> queue_;
+    // 工作线程是否已退出。Stop() 用它决定「join」还是「detach」（见 Stop）。
+    std::atomic<bool> worker_done_{false};
 };
 
 }  // namespace win32

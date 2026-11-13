@@ -64,14 +64,13 @@ public:
     }
 
     bool Save(const RuleConfig& cfg) {
-        std::ofstream out(path_, std::ios::out | std::ios::trunc | std::ios::binary);
-        if (!out) {
+        const std::string text = cfg.ToJson();
+        // 不能直接 trunc 再写：写到一半崩溃/断电/磁盘满会留下**半截 JSON**，
+        // 下次启动读到坏文件，用户攒下的全部设置就没了。走临时文件 + 原子替换。
+        if (!WriteAtomic(path_, text)) {
             last_error_ = "无法写入配置文件";
             return false;
         }
-        const std::string text = cfg.ToJson();
-        out.write(text.data(), static_cast<std::streamsize>(text.size()));
-        out.close();
         config_ = cfg;
         stamp_ = StampOf(path_);
         last_load_ok_ = true;
@@ -80,6 +79,28 @@ public:
     }
 
 private:
+    // 先写 `<path>.tmp`，成功后再替换目标文件。替换失败（如另一个进程占着）
+    // 时删掉临时文件，保持原文件不动 —— 最坏情况是这次没保存成功，而不是丢配置。
+    static bool WriteAtomic(const std::wstring& path, const std::string& text) {
+        const std::wstring tmp = path + L".tmp";
+        {
+            std::ofstream out(tmp, std::ios::out | std::ios::trunc | std::ios::binary);
+            if (!out) return false;
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
+            out.flush();
+            if (!out) {  // 磁盘满等：不能把半截临时文件留下来当配置
+                out.close();
+                ::DeleteFileW(tmp.c_str());
+                return false;
+            }
+        }
+        if (!::MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            ::DeleteFileW(tmp.c_str());
+            return false;
+        }
+        return true;
+    }
+
     static std::int64_t StampOf(const std::wstring& path) {
         WIN32_FILE_ATTRIBUTE_DATA data{};
         if (!::GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) return 0;
@@ -91,10 +112,7 @@ private:
 
     void EnsureFile() {
         if (StampOf(path_) != 0) return;
-        std::ofstream out(path_, std::ios::out | std::ios::trunc | std::ios::binary);
-        if (!out) return;
-        const std::string text = RuleConfig::Defaults().ToJson();
-        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        WriteAtomic(path_, RuleConfig::Defaults().ToJson());
     }
 
     void Load() {
