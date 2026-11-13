@@ -2,6 +2,10 @@
 
 # DynamicIsland-Win
 
+[![CI](https://github.com/Current-off/DynamicIsland-Win/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Current-off/DynamicIsland-Win/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4.svg)](#三十秒装好)
+
 **Windows 也有灵动岛。** 屏幕顶部一颗胶囊，把「正在发生的事」收进来 ——
 正在播的歌、正在跑的任务、正在改的文件、正在开的会。
 
