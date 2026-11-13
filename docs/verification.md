@@ -2082,3 +2082,88 @@ browser 28 / hanzi 6 / cache 8。设置自检 25 区域全可点、夹取正确�
 构建全绿零警告：core 89 / rules 155 / render 25 / interaction 45 / agent 119 /
 browser 28 / hanzi 6 / cache 8。
 设置自检：`zones=25 unclickable=0 clamp=opacity2/anchor0`。
+
+---
+
+## 第二十四轮：编辑器适配 + 可传播（2026-11-13 上午）
+
+用户：「网盘同步…一直进行你觉得需要做的东西，然后把这个做成可复用、可传播、
+方便部署完整的项目，提交到 github」。
+
+### 1. 为什么没做网盘，改做编辑器
+
+先查本机：OneDrive 只剩一个空目录（`OneDrive.exe` 都没装），百度网盘只有
+`BaiduYunKernel/Config/*.s3dbe`（自研私有格式，不是 SQLite）。**没有正在运行的实例
+就没有可验证的数据源** —— 而「写一个读不到东西的采集器」正是这个项目一直在避免的事。
+
+改做**编辑器当前编辑的文件**，理由：
+- 本机 Trae CN 正在运行，链路可实测
+- 数据源只有窗口标题，零文件 IO、零权限
+- 它和 agent 岛互补：agent 是「AI 在改」，它是「我在改」
+
+### 2. 标题解析是这个功能里唯一的难点
+
+窗口标题是人写的字符串，三种分隔符（`-` / `–` en dash / `—` em dash），五种形态：
+
+```
+renderer.hpp — DynamicIsland-Win — Trae CN        有工作区
+● app.ts — web — Cursor                           有未保存修改（VS Code 系）
+*main.cpp – order-service – IntelliJ IDEA 2024.1  JetBrains，星号 + 版本号
+README.md - Notepad++                             无工作区
+hosts - Notepad++ [Administrator]                 管理员标记
+```
+
+规则是**从右往左剥**：最后一段必须能匹配品牌表（否则整句都不认），倒数第二段是项目，
+剩下全是文件名（文件名自己可能含 ` - `）。`editor_tests` 59 项断言钉住这些。
+
+两个真踩到的坑：
+1. **`Trae CN` 要赢过 `Trae`** —— 品牌表按匹配长度取最长，否则中文版会被判成国际版。
+2. **`VS Code` vs `Visual Studio Code`** —— 官方标题是后者，有些发行版写前者。
+   `title_tail` 因此支持 `|` 分隔多候选。
+
+### 3. 权重与「不出岛」的克制
+
+编辑器权重 **56**：低于媒体（60）和浏览器前台（64），高于等待输入的 agent（50）。
+理由：正在编辑是**持续状态**，不是事件；但那确实是用户眼睛盯着的窗口。
+
+**只在前台是编辑器时出岛**，切走 2.5 秒收起。编辑器一开就是一整天，常驻就变成噪音了。
+
+### 4. 工程化
+
+| 新增 | 作用 |
+|---|---|
+| `tools/build.ps1` | 裸 PowerShell 就能编（不需要开 VS 命令行）。工具链路径从 `vswhere` + 注册表推导 —— 本机 SDK 在 D 盘，硬编码 `C:\Program Files (x86)\Windows Kits\10` 会直接失败 |
+| `tools/install.ps1` | 装到 `%LOCALAPPDATA%`、建开始菜单快捷方式、可选 `-Autostart`、`-Uninstall` 卸载（配置默认保留） |
+| `tools/publish.ps1` | 设 remote + 推 main，支持 `owner/repo` 简写 |
+| `.github/workflows/ci.yml` | **改成跑 `build.ps1`** —— 早期 CI 走 CMake、用户走 bash 脚本，两条路径必然分叉，表现是「CI 全绿但 clone 下来编不过」 |
+| `docs/images/` | README 截图（8 张） |
+| README | 重写开头：三十秒安装 + 能显示什么 + 材质 + 交互 + 隐私；技术细节挪到后面 |
+
+`build.ps1` 自己踩了两个坑：
+- 变量名不能叫 `$args`（PowerShell 自动变量），覆盖后 splat 出去是空数组，
+  cl.exe 每个目标都回「缺少源文件名」，看起来像编译器坏了
+- `@('-Fo' + $obj, ...)` 在数组字面量里做拼接会被逗号优先级拆开 —— 改逐项 `+=`
+
+### 5. 实测
+
+真实链路（Trae CN 未打开工作区时标题只有 "Trae CN"）：
+
+```
+editor: foreground=Trae CN title=Trae CN → 不出岛（不是编辑器或无障碍信息）
+```
+
+注入链路（`--editor="Trae CN|*renderer.hpp - DynamicIsland-Win - Trae CN"`）：
+
+```
+editor: Trae CN 「DynamicIsland-Win」 renderer.hpp (C++)
+```
+
+| 文件 | 内容 |
+|------|------|
+| `editor_2x.png` | 紧凑态：`< >` 图标 + renderer.hpp + `DynamicIsland-Win · C++` |
+| `editor_dirty_2x.png` | 带未保存圆点 |
+| `editor_exp_crop.png` | 展开态：文件名 + ● → 项目 · 语言 → 页脚 Trae CN |
+
+### 6. 回归
+
+`build.ps1` 一键跑完：89 / 155 / 25 / 45 / 119 / 59 / 28 全绿，零警告。
