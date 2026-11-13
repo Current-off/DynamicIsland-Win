@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# C++ / CMake
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+*.obj
+*.o
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Windhawk / packaging
+artifacts/
+dist/
+*.zip
+*.log
+.diagnostics/
+
+# Local settings and secrets (never commit)
+config.local.json
+*.token
+*.key
+.env
+.env.*
+
+# Editors / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

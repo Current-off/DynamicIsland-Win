@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Windows 主构建。**和用户本地用的是同一份脚本** —— 这是刻意的：
+  # 早期 CI 走 CMake，而用户实际用 build_cpp_msvc.sh，两条路径迟早分叉，
+  # 表现就是"CI 全绿但 clone 下来编不过"。
+  windows:
+    name: Windows / MSVC (build + tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain check
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -products * -property installationPath
+          "SDK: " + (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots').KitsRoot10
+
+      - name: Build and test
+        shell: pwsh
+        run: ./tools/build.ps1
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: diw_overlay-${{ github.sha }}
+          path: |
+            build/cpp/diw_overlay.exe
+            build/cpp/*_tests.exe
+          if-no-files-found: error
+
+  # 平台无关的核心域（Python 参考实现 + 跨语言契约）。
+  # 它不是产品的一部分，但契约是：C++ 的行为必须和这份参考实现一致。
+  spec:
+    name: Spec + contracts (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Reference spec and cross-language contract check
+        run: python tools/verify.py
+      - name: Behaviour demo
+        run: python demo.py

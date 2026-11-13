@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "_help": "保存即生效，运行中的实例 1 秒内热加载。改坏了也不影响运行，会回落到内置默认值。",
+  "events": {
+    "media": true,
+    "notification": true,
+    "clipboard": true,
+    "file": true,
+    "volume": true,
+    "power": true,
+    "device": true
+  },
+  "apps": {
+    "_help": "block 命中即静默；allow 非空时只放行命中项。子串匹配，忽略大小写。",
+    "block": [],
+    "allow": []
+  },
+  "extensions": {
+    "_help": "按扩展名（不带点）精确匹配，例如 zip、tmp、iso。",
+    "block": [
+      "tmp",
+      "crdownload",
+      "part",
+      "download"
+    ],
+    "allow": []
+  },
+  "clipboard": {
+    "min_chars": 2,
+    "max_chars": 60,
+    "hide_secrets": true
+  },
+  "quiet_hours": {
+    "enabled": false,
+    "from": "23:00",
+    "to": "08:00"
+  },
+  "fullscreen_hold": true,
+  "glass": true,
+  "sleep_bar": true,
+  "auto_sleep_sec": 60,
+  "lyrics": true,
+  "agents": true,
+  "browsers": true,
+  "meetings": true,
+  "editors": true,
+  "agent_max": 3,
+  "agent_idle_sec": 480,
+  "simplify_chinese": true,
+  "lyrics_proxy": "",
+  "opacity": 1,
+  "anchor": 1
+}
