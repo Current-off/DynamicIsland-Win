@@ -2,8 +2,10 @@
 // 视觉正确性无法用断言替代（见 CONTRIBUTING 的 L3 视觉验收），但下面这些必须先绿。
 #include <cstdio>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "../core/activity.hpp"
 #include "../src/win32/renderer.hpp"
@@ -172,11 +174,201 @@ void TestGlassBody() {
     Gdiplus::GdiplusShutdown(gdi_token);
 }
 
+// 把一张位图的像素读成字节序列，用于逐字节比较。
+std::vector<std::uint8_t> BytesOf(Gdiplus::Bitmap& bmp) {
+    const int w = static_cast<int>(bmp.GetWidth());
+    const int h = static_cast<int>(bmp.GetHeight());
+    Gdiplus::BitmapData data{};
+    const Gdiplus::Rect rect(0, 0, w, h);
+    if (bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &data) != Gdiplus::Ok) {
+        return {};
+    }
+    std::vector<std::uint8_t> out(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u);
+    const auto* src = static_cast<const std::uint8_t*>(data.Scan0);
+    const std::size_t stride =
+        static_cast<std::size_t>(data.Stride < 0 ? -data.Stride : data.Stride);
+    for (int y = 0; y < h; ++y) {
+        std::memcpy(out.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w) * 4u,
+                    src + static_cast<std::size_t>(y) * stride,
+                    static_cast<std::size_t>(w) * 4u);
+    }
+    bmp.UnlockBits(&data);
+    return out;
+}
+
+// 铬层与内容「分两次画」必须与「一次画完」逐字节相同。
+//
+// 为什么这条比"看起来一样"更值得测：主循环的铬层缓存正是靠这个等式成立的 ——
+// 命中时它把上一次存下的铬层像素 memcpy 回来，再只画内容。一旦两段的绘制顺序、
+// 裁剪关系或质量档位被改动，画面就会出现"底对了、字错位"这类只在某几种布局下
+// 才露头的偏差，而这种偏差人眼在深色胶囊上极难发现。这里用逐字节比较兜住它。
+void TestPhaseSplit() {
+    using namespace diw::win32;
+    Gdiplus::GdiplusStartupInput gdi_input;
+    ULONG_PTR gdi_token = 0;
+    if (Gdiplus::GdiplusStartup(&gdi_token, &gdi_input, nullptr) != Gdiplus::Ok) {
+        Check(false, "GdiplusStartup failed", __LINE__);
+        return;
+    }
+    {
+        // 画布要容得下最宽的场景（展开态 + 分离小圆 + HUD 余量）。
+        const int cw = 1000;
+        const int chh = 420;
+
+        // 固定的合成背景：玻璃材质必须喂一张确定的纹理，否则与"同一台机器上
+        // 两次渲染比对"这个前提就破了（真实桌面抓图每次都不一样）。
+        auto backdrop = std::make_unique<Gdiplus::Bitmap>(64, 64, PixelFormat32bppARGB);
+        {
+            Gdiplus::Graphics bg(backdrop.get());
+            for (int y = 0; y < 64; ++y) {
+                for (int x = 0; x < 64; ++x) {
+                    const bool on = ((x / 8) + (y / 8)) % 2 == 0;
+                    Gdiplus::SolidBrush b(Gdiplus::Color(255, on ? 210 : 40, on ? 180 : 60,
+                                                         on ? 60 : 150));
+                    bg.FillRectangle(&b, x, y, 1, 1);
+                }
+            }
+        }
+
+        auto quality = [](Gdiplus::Graphics& g) {
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+            g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+            g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+        };
+
+        // split=true 时用两个 Graphics 分两段画，模拟主循环的缓存路径。
+        auto render = [&](const CapsuleView& v, bool with_glass, bool split, bool content_only) {
+            auto bmp = std::make_unique<Gdiplus::Bitmap>(cw, chh, PixelFormat32bppARGB);
+            CapsuleRenderer renderer;
+            GlassParams glass;
+            if (with_glass) {
+                glass.backdrop = backdrop.get();
+                glass.full_w = 64.0f;
+                glass.full_h = 64.0f;
+            }
+            {
+                Gdiplus::Graphics g(bmp.get());
+                quality(g);
+                if (!split) {
+                    renderer.Draw(g, v, 1.0f, glass);
+                } else if (content_only) {
+                    renderer.Draw(g, v, 1.0f, glass, CapsuleRenderer::Phase::Content);
+                } else {
+                    renderer.Draw(g, v, 1.0f, glass, CapsuleRenderer::Phase::Chrome);
+                }
+            }
+            if (split && !content_only) {
+                Gdiplus::Graphics g(bmp.get());
+                quality(g);
+                renderer.Draw(g, v, 1.0f, glass, CapsuleRenderer::Phase::Content);
+            }
+            return bmp;
+        };
+
+        auto base_media = [](int mode) {
+            CapsuleView v;
+            v.opacity_mode = mode;
+            v.content_w = Layout::kCompactW;
+            v.content_h = Layout::kCompactH;
+            v.title = "晴天";
+            v.subtitle = "周杰伦 · 叶惠美";
+            v.meta = "网易云音乐";
+            v.kind = "media";
+            v.playing = true;
+            v.progress = 0.42;
+            v.wave_phase = 1.7;
+            v.more_count = 2;
+            return v;
+        };
+
+        CapsuleView compact = base_media(2);
+        DetachedItem detached;
+        detached.kind = "notification";
+        detached.activity_id = "live-notif";
+        compact.detached_w = Layout::kDetachedSize;
+        compact.detached_items.push_back(detached);
+
+        CapsuleView agent = compact;
+        agent.detached_items.clear();
+        agent.detached_w = 0.0;
+        agent.agent = true;
+        agent.kind = "agent";
+        agent.agent_provider = "claude";
+        agent.agent_state = "running";
+        agent.agent_action = "正在编辑 renderer.hpp";
+        agent.agent_meta = "3/7";
+
+        CapsuleView expanded = base_media(2);
+        expanded.expanded = true;
+        expanded.content_w = Layout::kExpandedW;
+        expanded.content_h = Layout::kExpandedLyricH;
+        expanded.lyric_active = true;
+        expanded.lyric_status = "ok";
+        expanded.lyric_prev = "故事的小黄花";
+        expanded.lyric_cur = "从出生那年就飘着";
+        expanded.lyric_next = "童年的荡秋千";
+
+        CapsuleView overview = base_media(2);
+        overview.overview = true;
+        for (int i = 0; i < 3; ++i) {
+            OverviewItem item;
+            item.kind = (i == 0) ? "media" : (i == 1) ? "browser" : "agent";
+            item.title = "任务标题";
+            item.subtitle = "副标题 · 说明";
+            item.state = "running";
+            overview.items.push_back(item);
+        }
+
+        CapsuleView sleep = base_media(2);
+        sleep.sleep_bar = true;
+        sleep.playing = false;
+
+        CapsuleView glassY = base_media(1);
+        CapsuleView liquid = base_media(0);
+
+        struct Case {
+            const char* name;
+            CapsuleView view;
+            bool glass;
+        };
+        const Case cases[] = {
+            {"compact+detached", compact, false}, {"agent", agent, false},
+            {"expanded", expanded, false},        {"overview", overview, false},
+            {"sleep_bar", sleep, false},          {"glass-balanced", glassY, true},
+            {"glass-liquid", liquid, true},
+        };
+
+        for (const auto& c : cases) {
+            const auto whole = render(c.view, c.glass, false, false);
+            const auto split = render(c.view, c.glass, true, false);
+            const auto a = BytesOf(*whole);
+            const auto b = BytesOf(*split);
+            const bool equal = !a.empty() && a == b;
+            ++g_run;
+            if (!equal) {
+                ++g_failed;
+                std::size_t first = 0;
+                while (first < a.size() && first < b.size() && a[first] == b[first]) ++first;
+                std::printf("FAIL phase split [%s]: first divergence at byte %zu\n", c.name, first);
+            }
+        }
+
+        // 反向确认：只画内容必须与画完整不同，否则上面的等式可能是"两段都空"的假绿。
+        const auto whole = render(compact, false, false, false);
+        const auto content_only = render(compact, false, true, true);
+        CHECK(BytesOf(*whole) != BytesOf(*content_only));
+    }
+    Gdiplus::GdiplusShutdown(gdi_token);
+}
+
 int main() {
     TestParseProgress();
     TestLayoutContract();
     TestWiden();
     TestGlassBody();
+    TestPhaseSplit();
     std::printf("render_tests: run=%d failed=%d\n", g_run, g_failed);
     return g_failed == 0 ? 0 : 1;
 }

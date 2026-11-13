@@ -27,6 +27,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace diw {
 namespace win32 {
@@ -105,22 +106,16 @@ public:
     // ±1 是刻意的保守选择：再大就能看出网格纹理了。
     void Dither() {
         if (bits_ == nullptr || dithered_) return;
-        static constexpr int kBayer4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
         std::uint8_t* row = bits_;
         for (int y = 0; y < height_; ++y, row += static_cast<std::size_t>(width_) * 4u) {
             std::uint8_t* p = row;
-            const int* pattern = kBayer4 + ((y & 3) << 2);
             for (int x = 0; x < width_; ++x, p += 4) {
                 if (p[3] == 0u) continue;  // 全透明像素不抖动，省一半时间
-                const int t = pattern[x & 3];
-                const int d = (t < 5) ? -1 : (t > 10 ? 1 : 0);
+                const int d = BayerDelta(x, y);
                 if (d == 0) continue;
-                const int b = p[0] + d;
-                const int g = p[1] + d;
-                const int r = p[2] + d;
-                p[0] = static_cast<std::uint8_t>(b < 0 ? 0 : (b > 255 ? 255 : b));
-                p[1] = static_cast<std::uint8_t>(g < 0 ? 0 : (g > 255 ? 255 : g));
-                p[2] = static_cast<std::uint8_t>(r < 0 ? 0 : (r > 255 ? 255 : r));
+                p[0] = ClampByte(p[0] + d);
+                p[1] = ClampByte(p[1] + d);
+                p[2] = ClampByte(p[2] + d);
             }
         }
         dithered_ = true;
@@ -130,28 +125,97 @@ public:
     int Width() const { return width_; }
     int Height() const { return height_; }
 
+    // 供上层做「静态层缓存」：整块存取当前像素。
+    // 只做 memcpy、不经过 GDI+，所以取回后的像素与当初存下时逐字节相同 ——
+    // 这正是它能安全替代"重画一遍"的前提。
+    std::size_t ByteSize() const {
+        return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u;
+    }
+    void SavePixels(std::vector<std::uint8_t>& out) const {
+        if (bits_ == nullptr) {
+            out.clear();
+            return;
+        }
+        out.assign(bits_, bits_ + ByteSize());
+    }
+    void LoadPixels(const std::vector<std::uint8_t>& in) {
+        if (bits_ == nullptr || in.size() != ByteSize()) return;
+        std::memcpy(bits_, in.data(), ByteSize());
+    }
+
+    // 4×4 有序抖动的 ±1 LSB 偏移。Dither() 与 Premultiply() 共用同一个实现 ——
+    // 两份各写一遍的话，"屏幕上抖过、导出的 PNG 没抖"这种偏差迟早发生。
+    static int BayerDelta(int x, int y) {
+        static constexpr int kBayer4[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
+        const int t = kBayer4[((y & 3) << 2) + (x & 3)];
+        return (t < 5) ? -1 : (t > 10 ? 1 : 0);
+    }
+
+    static std::uint8_t ClampByte(int v) {
+        return static_cast<std::uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+    }
+
     // BGRA 顺序做预乘：RGB *= A / 255。
+    //
+    // 抖动与预乘合并成**一遍**遍历。原先 Dither() 扫一遍、预乘再扫一遍，
+    // 同一个像素的四个字节被读写两次；合并后逐字节结果完全一致
+    //（同一像素先加抖动偏移、再乘 alpha，顺序没变），只是少一次全画布扫描。
+    // need_dither 是循环不变量，编译器会把它提到循环外。
     void Premultiply() {
         if (bits_ == nullptr) return;
-        Dither();  // 先抖动再预乘：抖动量是 ±1 LSB，必须在量化发生的位置生效
-        const std::size_t count = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
-        std::uint8_t* p = bits_;
-        for (std::size_t i = 0; i < count; ++i, p += 4) {
-            const std::uint32_t a = p[3];
-            if (a == 255u) continue;
-            if (a == 0u) {
-                p[0] = p[1] = p[2] = 0;
-                continue;
+        const bool need_dither = !dithered_;
+        const std::size_t row_bytes = static_cast<std::size_t>(width_) * 4u;
+        std::uint8_t* row = bits_;
+        for (int y = 0; y < height_; ++y, row += row_bytes) {
+            std::uint8_t* p = row;
+            for (int x = 0; x < width_; ++x, p += 4) {
+                const std::uint32_t a = p[3];
+                if (a == 0u) {  // 全透明像素既不抖动也不预乘，直接清零 RGB
+                    p[0] = p[1] = p[2] = 0;
+                    continue;
+                }
+                if (need_dither) {
+                    const int d = BayerDelta(x, y);
+                    if (d != 0) {
+                        p[0] = ClampByte(p[0] + d);
+                        p[1] = ClampByte(p[1] + d);
+                        p[2] = ClampByte(p[2] + d);
+                    }
+                }
+                if (a != 255u) {
+                    p[0] = static_cast<std::uint8_t>((p[0] * a + 127u) / 255u);
+                    p[1] = static_cast<std::uint8_t>((p[1] * a + 127u) / 255u);
+                    p[2] = static_cast<std::uint8_t>((p[2] * a + 127u) / 255u);
+                }
             }
-            p[0] = static_cast<std::uint8_t>((p[0] * a + 127u) / 255u);
-            p[1] = static_cast<std::uint8_t>((p[1] * a + 127u) / 255u);
-            p[2] = static_cast<std::uint8_t>((p[2] * a + 127u) / 255u);
         }
+        dithered_ = true;
     }
 
     // 提交到桌面。global_alpha 为整体不透明度（0-255）。
     void Present(HWND hwnd, int x, int y, BYTE global_alpha) {
+        PresentIfChanged(hwnd, x, y, global_alpha);
+    }
+
+    // 与屏幕上已有的内容逐字节相同时跳过提交，返回 false。
+    //
+    // 为什么要这么做：UpdateLayeredWindow 每次都让 DWM 重新合成一整张 32bpp 位图，
+    // 实测占单帧成本的大头（胶囊静止时整机仍跑掉约 29% 单核，其中玻璃重拍只占 4 个点）。
+    // 判断依据是**已经画好的像素**而不是"输入有没有变"——后者要穷举所有影响像素的字段，
+    // 漏一个就是画面冻住；前者只要字节相同，不提交就一定没有可见差异。
+    // 代价是一次 memcmp（约 100KB，10µs 量级），换掉一次合成提交。
+    bool PresentIfChanged(HWND hwnd, int x, int y, BYTE global_alpha) {
+        if (bits_ == nullptr) return false;
         Premultiply();
+        const std::size_t bytes =
+            static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4u;
+        const bool same_place = (x == presented_x_ && y == presented_y_ &&
+                                 global_alpha == presented_alpha_ && width_ == presented_w_ &&
+                                 height_ == presented_h_);
+        if (same_place && presented_bits_.size() == bytes &&
+            std::memcmp(presented_bits_.data(), bits_, bytes) == 0) {
+            return false;
+        }
         POINT src{0, 0};
         SIZE size{width_, height_};
         POINT dst{x, y};
@@ -162,6 +226,14 @@ public:
         if (!::UpdateLayeredWindow(hwnd, nullptr, &dst, &size, mem_dc_, &src, 0, &blend, ULW_ALPHA)) {
             throw std::runtime_error("UpdateLayeredWindow failed");
         }
+        if (presented_bits_.size() != bytes) presented_bits_.resize(bytes);
+        std::memcpy(presented_bits_.data(), bits_, bytes);
+        presented_x_ = x;
+        presented_y_ = y;
+        presented_alpha_ = global_alpha;
+        presented_w_ = width_;
+        presented_h_ = height_;
+        return true;
     }
 
     // 屏幕抓取后位图的 alpha 字节是 0（BitBlt 不写 alpha），必须强制不透明，
@@ -217,6 +289,10 @@ private:
         bits_ = nullptr;
         width_ = 0;
         height_ = 0;
+        // 尺寸变了就必须重新提交：影子缓冲一起清掉，避免拿旧尺寸的像素做比较。
+        presented_bits_.clear();
+        presented_w_ = 0;
+        presented_h_ = 0;
     }
 
     HDC mem_dc_ = nullptr;
@@ -226,6 +302,14 @@ private:
     int width_ = 0;
     int height_ = 0;
     bool dithered_ = false;  // 抖动与坐标绑定，同一帧重复调用无意义，用标志挡住
+
+    // 上一次真正提交到桌面的像素与落点（PresentIfChanged 用来判断能否跳过）。
+    std::vector<std::uint8_t> presented_bits_;
+    int presented_x_ = 0;
+    int presented_y_ = 0;
+    int presented_w_ = 0;
+    int presented_h_ = 0;
+    BYTE presented_alpha_ = 0;
 };
 
 }  // namespace win32

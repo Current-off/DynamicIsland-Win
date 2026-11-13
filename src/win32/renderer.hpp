@@ -300,7 +300,50 @@ struct GlassParams {
 
 class CapsuleRenderer {
 public:
-    CapsuleRenderer() : family_(MakeFamily()) {}
+    // 文本缓存的两个用途不能共用一条：DrawText 需要省略号裁剪 + 对齐，
+    // MeasureText 只需要 NoWrap（带裁剪的 format 去量宽会得到不同的结果）。
+    // 这些类型必须声明在所有成员函数签名之前 —— 返回类型不在「类完整上下文」里。
+    enum class FmtUse { Draw, Measure };
+
+    struct TextKey {
+        float size_px;
+        int style;
+        int align;
+        FmtUse use;
+        bool operator==(const TextKey& other) const {
+            return size_px == other.size_px && style == other.style && align == other.align &&
+                   use == other.use;
+        }
+    };
+
+    struct TextObj {
+        TextKey key{};
+        std::unique_ptr<Gdiplus::Font> font;
+        std::unique_ptr<Gdiplus::StringFormat> format;
+    };
+
+    struct TextRef {
+        Gdiplus::Font* font = nullptr;
+        Gdiplus::StringFormat* format = nullptr;
+    };
+
+    struct ShadowSlot {
+        std::uint64_t key = 0;
+        std::unique_ptr<Gdiplus::Bitmap> bitmap;
+    };
+
+    // 48 个文本条目 ≈ 48 次 Font 构造的封顶内存（实体只有几千字节），
+    // 4 个投影槽 ≈ 一帧最多 3 种尺寸 + 1 格抖动余量。
+    static constexpr std::size_t kTextCacheCap = 48;
+    static constexpr std::size_t kShadowSlots = 4;
+    // 投影固定强度的 8bit 表示：255 * 0.22 ≈ 56。烘在剪影里，见 ShadowFor。
+    static constexpr int kShadowBakedAlpha = 56;
+
+    CapsuleRenderer() : family_(MakeFamily()) {
+        // 预留容量：缓存命中路径上不应触发 vector 重分配（指针会失效）。
+        text_cache_.reserve(kTextCacheCap);
+        shadow_slots_.reserve(kShadowSlots);
+    }
 
     void Draw(Gdiplus::Graphics& g, const CapsuleView& v, float scale) {
         Draw(g, v, scale, GlassParams{});
@@ -310,7 +353,14 @@ public:
     // 一处漏掉就会在那块文字上"糊"掉，而这种漏很难靠肉眼发现。
     void SetTextShadow(bool on) { text_shadow_ = on; }
 
-    void Draw(Gdiplus::Graphics& g, const CapsuleView& v, float scale, const GlassParams& glass) {
+    // 绘制分两个可独立调用的阶段：铬层（底/受光/描边/投影）与内容（图标/文字/律动/角标）。
+    // 拆开是为了让上层能缓存铬层 —— 实测它占单帧绘制成本的 63%（8.4ms 里的 5.3ms），
+    // 而在尺寸、透明度、材质、玻璃纪元都不变时，这一段逐帧完全一致。
+    // 两个阶段仍按原顺序绘制（chrome 在前、content 在后），Phase::Both 与拆分前等价。
+    enum class Phase { Both, Chrome, Content };
+
+    void Draw(Gdiplus::Graphics& g, const CapsuleView& v, float scale, const GlassParams& glass,
+              Phase phase = Phase::Both) {
         const float margin = Layout::kMargin * scale;
         const float w = static_cast<float>(v.content_w) * scale;
         const float h = static_cast<float>(v.content_h) * scale;
@@ -345,9 +395,13 @@ public:
                 float x = left;
                 for (std::size_t i = 0; i < n; ++i) {
                     const Gdiplus::RectF box(x, top, iw, ih);
-                    DropShadow(g, box, a, scale);
-                    DrawPill(g, box, a, scale, glass, v.opacity_mode);
-                    DrawIsland(g, v.items[i], box, a, scale, glassy_text, v.wave_phase);
+                    if (phase != Phase::Content) {
+                        DropShadow(g, box, a, scale);
+                        DrawPill(g, box, a, scale, glass, v.opacity_mode);
+                    }
+                    if (phase != Phase::Chrome) {
+                        DrawIsland(g, v.items[i], box, a, scale, glassy_text, v.wave_phase);
+                    }
                     x += iw + gap;
                 }
             } else {
@@ -367,48 +421,53 @@ public:
 
             // 投影先画，且和胶囊一起投 —— 否则分离小胶囊会像贴在玻璃上的贴纸。
             // 休眠扁条刻意不投：一条 26px 的待机条再拖个影子，反而更显眼、更挡东西。
-            if (!v.sleep_bar) {
-                // 液态玻璃也要投影：没有影子的透明块像直接印在壁纸上，浮不起来。
-                // 但要比实心款淡得多（55%），否则在亮壁纸上会拖出一团灰雾。
-                const BYTE sh = v.opacity_mode == 0 ? Clamp8(static_cast<int>(a * 0.55f)) : a;
-                DropShadow(g, pill, sh, scale);
-                for (const auto& box : dboxes) DropShadow(g, box, sh, scale);
+            if (phase != Phase::Content) {
+                if (!v.sleep_bar) {
+                    // 液态玻璃也要投影：没有影子的透明块像直接印在壁纸上，浮不起来。
+                    // 但要比实心款淡得多（55%），否则在亮壁纸上会拖出一团灰雾。
+                    const BYTE sh = v.opacity_mode == 0 ? Clamp8(static_cast<int>(a * 0.55f)) : a;
+                    DropShadow(g, pill, sh, scale);
+                    for (const auto& box : dboxes) DropShadow(g, box, sh, scale);
+                }
+
+                DrawPill(g, pill, a, scale, v.sleep_bar ? GlassParams{} : glass, v.opacity_mode);
+                for (const auto& box : dboxes) DrawPill(g, box, a, scale, glass, v.opacity_mode);
             }
 
-            DrawPill(g, pill, a, scale, v.sleep_bar ? GlassParams{} : glass, v.opacity_mode);
-            for (const auto& box : dboxes) DrawPill(g, box, a, scale, glass, v.opacity_mode);
+            if (phase != Phase::Chrome) {
+                if (v.sleep_bar) {
+                    DrawSleepBar(g, v, pill, a, scale, glassy_text);
+                } else if (v.expanded) {
+                    DrawExpanded(g, v, pill, a, scale, glassy_text);
+                } else {
+                    DrawCompact(g, v, pill, a, scale, glassy_text);
+                }
 
-            if (v.sleep_bar) {
-                DrawSleepBar(g, v, pill, a, scale, glassy_text);
-            } else if (v.expanded) {
-                DrawExpanded(g, v, pill, a, scale, glassy_text);
-            } else {
-                DrawCompact(g, v, pill, a, scale, glassy_text);
-            }
-
-            for (int i = 0; i < dcount; ++i) {
-                const DetachedItem& item = v.detached_items[static_cast<std::size_t>(i)];
-                const std::string& dk = item.kind.empty() ? v.kind : item.kind;
-                const std::string& dc = item.kind.empty() ? v.cover_path : item.cover_path;
-                const std::string dp = item.kind.empty() ? v.agent_provider : item.provider;
-                const float chip_size = dsize * 0.60f;
-                const Gdiplus::RectF chip = ChipRect(dboxes[static_cast<std::size_t>(i)], chip_size);
-                DrawChipEx(g, dk, chip, chip_size, a, dc,
-                           dk.rfind("agent", 0) == 0 ? AgentAccentFor(dp) : AccentFor(dk), dp);
-                if (dk.rfind("agent", 0) == 0) {
-                    DrawStateDot(g, chip, a, scale, item.state, v.wave_phase);
+                for (int i = 0; i < dcount; ++i) {
+                    const DetachedItem& item = v.detached_items[static_cast<std::size_t>(i)];
+                    const std::string& dk = item.kind.empty() ? v.kind : item.kind;
+                    const std::string& dc = item.kind.empty() ? v.cover_path : item.cover_path;
+                    const std::string dp = item.kind.empty() ? v.agent_provider : item.provider;
+                    const float chip_size = dsize * 0.60f;
+                    const Gdiplus::RectF chip =
+                        ChipRect(dboxes[static_cast<std::size_t>(i)], chip_size);
+                    DrawChipEx(g, dk, chip, chip_size, a, dc,
+                               dk.rfind("agent", 0) == 0 ? AgentAccentFor(dp) : AccentFor(dk), dp);
+                    if (dk.rfind("agent", 0) == 0) {
+                        DrawStateDot(g, chip, a, scale, item.state, v.wave_phase);
+                    }
                 }
             }
             }
         }
 
-        if (!v.hud.empty()) {
+        if (phase != Phase::Chrome && !v.hud.empty()) {
             // 状态行画在一块深色小胶囊上。原来是裸的浅灰字，在浅色桌面上
             // 几乎看不见 —— 诊断信息看不清就等于没有。
             const float hud_h = Layout::kHudHeight * scale;
             const float hud_y = top + h + 4.0f * scale;
             const std::wstring hud_text = Widen(v.hud);
-            const float text_w = MeasureText(g, family_.get(), hud_text, 10.5f * scale,
+            const float text_w = MeasureText(g, hud_text, 10.5f * scale,
                                              Gdiplus::FontStyleRegular);
             const float plate_w = std::min(group_w, text_w + 18.0f * scale);
             const float plate_x = margin + (group_w - plate_w) * 0.5f;
@@ -487,71 +546,121 @@ private:
     // 边缘本身又是硬边，两重毛糙叠加。盒模糊给出一条单调平滑的 alpha
     // 衰减曲线，既没有色带也没有硬边，这是所有正经窗口投影的画法。
     //
-    // 模糊结果按 (宽, 高, alpha, 半径) 缓存：静止画面上零成本，
-    // 只有出现/展开动画期间（alpha 或尺寸在变）每帧重算一次。
+    // 缓存键里**不再包含 alpha**：模糊只作用在剪影形状上，整体不透明度在贴回时施加。
+    // 这一条是性能关键 —— 旧版把 alpha 编进 key，而一帧要画 3 个不同尺寸的投影，
+    // 三个 key 轮番冲刷同一个单槽缓存，等于**每帧重算 3 组 × 6 趟逐像素扫描**，
+    // 哪怕画面完全静止。现在形状键稳定、跨帧命中，静止时零重算；
+    // 淡入淡出期间键也不变（模糊是线性算子，先模糊后缩放 alpha 与先缩放后模糊等价），
+    // 只有贴图那一步退化到 ColorMatrix。
     void DropShadow(Gdiplus::Graphics& g, const Gdiplus::RectF& r, BYTE alpha, float scale) {
         const int radius_px = std::lround(7.0f * scale);
         const int drop_px = std::lround(3.5f * scale);
         const int pad = radius_px * 2 + drop_px + 2;
-        const int bw = static_cast<int>(std::lround(r.Width)) + pad * 2;
-        const int bh = static_cast<int>(std::lround(r.Height)) + pad * 2;
-        const std::uint32_t key = static_cast<std::uint32_t>(bw) << 20 ^
-                                  static_cast<std::uint32_t>(bh) << 6 ^
-                                  static_cast<std::uint32_t>(alpha) << 16 ^
-                                  static_cast<std::uint32_t>(radius_px);
-        if (shadow_key_ != key || shadow_ == nullptr) {
-            RenderShadowBitmap(bw, bh, static_cast<int>(std::lround(r.Width)),
-                               static_cast<int>(std::lround(r.Height)), alpha, radius_px);
-            shadow_key_ = key;
-        }
-        if (shadow_ == nullptr) return;
-        g.DrawImage(shadow_.get(), Gdiplus::RectF(r.X - pad, r.Y - pad + drop_px,
-                                                  static_cast<float>(bw), static_cast<float>(bh)),
-                    0, 0, static_cast<float>(bw), static_cast<float>(bh), Gdiplus::UnitPixel);
+        const int pw = static_cast<int>(std::lround(r.Width));
+        const int ph = static_cast<int>(std::lround(r.Height));
+        const int bw = pw + pad * 2;
+        const int bh = ph + pad * 2;
+        // 4 个 16 位字段拼键：不重叠、不靠异或，尺寸越界时直接绕过缓存。
+        if (bw <= 0 || bh <= 0 || bw > 0xFFFF || bh > 0xFFFF || pw > 0xFFFF || ph > 0xFFFF) return;
+        const std::uint64_t key = static_cast<std::uint64_t>(bw) |
+                                  (static_cast<std::uint64_t>(bh) << 16) |
+                                  (static_cast<std::uint64_t>(pw) << 32) |
+                                  (static_cast<std::uint64_t>(ph) << 48);
+        Gdiplus::Bitmap* silhouette = ShadowFor(key, bw, bh, pw, ph, radius_px);
+        if (silhouette == nullptr) return;
+        DrawShadowAlpha(g, *silhouette,
+                        Gdiplus::RectF(r.X - pad, r.Y - pad + drop_px,
+                                       static_cast<float>(bw), static_cast<float>(bh)),
+                        alpha);
     }
 
-    // 离屏生成一枚模糊好的投影。缓存到成员，静止画面零成本。
-    // 投影的 RGB 恒为 0（纯黑），模糊实质只作用在 alpha 通道上。
-    void RenderShadowBitmap(int bw, int bh, int pw, int ph, BYTE alpha, int radius_px) {
-        shadow_.reset();
-        std::unique_ptr<Gdiplus::Bitmap> bmp(new Gdiplus::Bitmap(bw, bh, PixelFormat32bppARGB));
-        if (bmp->GetLastStatus() != Gdiplus::Ok) return;
+    // 取（或生成）一枚已模糊的黑色剪影，容量 kShadowSlots，MRU 排序。
+    // 一帧最多同时用到 3 种尺寸（主胶囊 + 两个分离小圆），留一格余量做抖动。
+    Gdiplus::Bitmap* ShadowFor(std::uint64_t key, int bw, int bh, int pw, int ph, int radius_px) {
+        for (std::size_t i = 0; i < shadow_slots_.size(); ++i) {
+            if (shadow_slots_[i].key == key) {
+                if (i != 0) {
+                    std::rotate(shadow_slots_.begin(), shadow_slots_.begin() + i,
+                                shadow_slots_.begin() + i + 1);
+                }
+                return shadow_slots_.front().bitmap.get();
+            }
+        }
+        auto bitmap = std::make_unique<Gdiplus::Bitmap>(bw, bh, PixelFormat32bppARGB);
+        if (bitmap->GetLastStatus() != Gdiplus::Ok) return nullptr;
         {
-            Gdiplus::Graphics g(bmp.get());
+            Gdiplus::Graphics g(bitmap.get());
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             const Gdiplus::RectF rect((bw - pw) * 0.5f, (bh - ph) * 0.5f,
                                       static_cast<float>(pw), static_cast<float>(ph));
-            FillRounded(g, rect, ph * 0.5f,
-                        Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.22f)), 0, 0, 0));
+            // 投影的固定强度 0.22 烘进剪影：这样 alpha==255 的常态可以直接
+            // DrawImage 贴图（快路径），只有淡入淡出时才需要 ColorMatrix 缩放。
+            // 若是填 255、每帧都乘 0.22，ColorMatrix 会让每一张投影都掉进
+            // 逐像素合成路径，一览模式 4 个岛量出来反而比旧版更慢。
+            FillRounded(g, rect, ph * 0.5f, Gdiplus::Color(kShadowBakedAlpha, 0, 0, 0));
         }
         Gdiplus::BitmapData data;
         const Gdiplus::Rect lock(0, 0, bw, bh);
-        if (bmp->LockBits(&lock, Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
-                          PixelFormat32bppARGB, &data) != Gdiplus::Ok) {
-            return;
+        if (bitmap->LockBits(&lock, Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
+                             PixelFormat32bppARGB, &data) != Gdiplus::Ok) {
+            return nullptr;
         }
         auto* bits = static_cast<std::uint8_t*>(data.Scan0);
         const std::size_t stride = static_cast<std::size_t>(data.Stride >= 0 ? data.Stride : -data.Stride);
-        std::vector<std::uint8_t> buf(bits, bits + stride * bh);
+        const std::size_t bytes = stride * static_cast<std::size_t>(bh);
+        // 复用模糊缓冲：拖动/展开动画里尺寸每帧在变，缓存不命中时不该再各分配两次。
+        if (blur_buf_.size() != bytes) blur_buf_.resize(bytes);
+        if (blur_tmp_.size() != bytes) blur_tmp_.resize(bytes);
+        std::memcpy(blur_buf_.data(), bits, bytes);
         for (int pass = 0; pass < 3; ++pass) {  // 3 趟盒模糊 ≈ 高斯，边缘单调无色带
-            BoxBlurAxis(buf, bw, bh, radius_px, true);
-            BoxBlurAxis(buf, bw, bh, radius_px, false);
+            BoxBlurAxis(blur_buf_, blur_tmp_, bw, bh, radius_px, true);
+            BoxBlurAxis(blur_buf_, blur_tmp_, bw, bh, radius_px, false);
         }
         for (int y = 0; y < bh; ++y) {
             std::memcpy(bits + static_cast<std::size_t>(y) * stride,
-                        buf.data() + static_cast<std::size_t>(y) * stride,
+                        blur_buf_.data() + static_cast<std::size_t>(y) * stride,
                         static_cast<std::size_t>(bw) * 4u);
         }
-        bmp->UnlockBits(&data);
-        shadow_ = std::move(bmp);
+        bitmap->UnlockBits(&data);
+        if (shadow_slots_.size() >= kShadowSlots) shadow_slots_.pop_back();
+        ShadowSlot slot;
+        slot.key = key;
+        slot.bitmap = std::move(bitmap);
+        shadow_slots_.insert(shadow_slots_.begin(), std::move(slot));
+        return shadow_slots_.front().bitmap.get();
+    }
+
+    // 把剪影贴回画布。常态（alpha 已到顶）走 DrawImage 快路径；
+    // 只有淡入淡出的中间帧才用 ColorMatrix 缩放 alpha（逐像素，但每帧只影响形状不变的那几张）。
+    static void DrawShadowAlpha(Gdiplus::Graphics& g, Gdiplus::Bitmap& silhouette,
+                                const Gdiplus::RectF& dst, BYTE alpha) {
+        const float factor = static_cast<float>(alpha) / 255.0f;
+        if (factor <= 0.0f) return;
+        const Gdiplus::REAL sw = static_cast<Gdiplus::REAL>(silhouette.GetWidth());
+        const Gdiplus::REAL sh = static_cast<Gdiplus::REAL>(silhouette.GetHeight());
+        if (factor >= 0.999f) {
+            g.DrawImage(&silhouette, dst, 0.0f, 0.0f, sw, sh, Gdiplus::UnitPixel);
+            return;
+        }
+        Gdiplus::ColorMatrix cm{};  // 零初始化后只填对角线 = 单位矩阵 + alpha 缩放
+        cm.m[0][0] = 1.0f;
+        cm.m[1][1] = 1.0f;
+        cm.m[2][2] = 1.0f;
+        cm.m[3][3] = factor;
+        cm.m[4][4] = 1.0f;
+        Gdiplus::ImageAttributes attrs;
+        attrs.SetColorMatrix(&cm, Gdiplus::ColorMatrixFlagsDefault, Gdiplus::ColorAdjustTypeBitmap);
+        g.DrawImage(&silhouette, dst, 0.0f, 0.0f, sw, sh, Gdiplus::UnitPixel, &attrs);
     }
 
     // 可分离盒模糊（单方向一趟）。滑动窗口累加和，O(n) 与半径无关。
     // 与 backdrop.hpp 里的实现同源；那里那版的教训记在这里：
     // 输出指针必须随坐标前进，且边缘窗口样本数按实际数量相除，否则四边压暗。
-    static void BoxBlurAxis(std::vector<std::uint8_t>& buf, int w, int h, int radius, bool horizontal) {
+    // tmp 由调用方持有并复用（原先每次调用都新分配一次，3 趟 × 2 轴 = 6 次/帧）。
+    static void BoxBlurAxis(std::vector<std::uint8_t>& buf, std::vector<std::uint8_t>& tmp,
+                            int w, int h, int radius, bool horizontal) {
         if (radius <= 0) return;
-        std::vector<std::uint8_t> tmp(buf.size());
+        if (tmp.size() != buf.size()) tmp.resize(buf.size());
         const int len = horizontal ? w : h;
         const int lines = horizontal ? h : w;
         for (int line = 0; line < lines; ++line) {
@@ -1323,17 +1432,51 @@ private:
         g.FillEllipse(&brush, dot);
     }
 
+    // ---------- 文本对象缓存 ----------
+    // 每次 DrawString 都构造一个 Font + StringFormat 是纯浪费：GDI+ 的 Font 构造
+    // 要解析字体族、算 metrics，而一帧有几十段文字（全透明模式每段还要画 3 遍）。
+    // 这里按 (尺寸, 样式, 对齐, 用途) 缓存，键用 float **精确相等**而不是量化：
+    // 字号都是 `常量 * scale` 的乘积，同一台机器上逐位相同；量化反而会让字号
+    // 偏移 0.1px，破坏截图比对的确定性。万一某条路径的字号在动画中连续变化，
+    // 容量上限保证它退化成「每帧重建」，只是不命中，不会无界增长。
+    //
+    // 命中后把条目移动到队首（MRU），淘汰从队尾走 —— 常态下热点条目永远是
+    // 那几个 (13.5px bold, 10.5px regular...)，线性扫描 48 项比哈希更省。
+    TextRef TextFor(float size_px, Gdiplus::FontStyle style, Gdiplus::StringAlignment align,
+                    FmtUse use) {
+        const TextKey key{size_px, static_cast<int>(style), static_cast<int>(align), use};
+        for (std::size_t i = 0; i < text_cache_.size(); ++i) {
+            if (text_cache_[i].key == key) {
+                if (i != 0) {
+                    std::rotate(text_cache_.begin(), text_cache_.begin() + i,
+                                text_cache_.begin() + i + 1);
+                }
+                return TextRef{text_cache_.front().font.get(), text_cache_.front().format.get()};
+            }
+        }
+        TextObj obj;
+        obj.key = key;
+        obj.font = std::make_unique<Gdiplus::Font>(family_.get(), size_px, style,
+                                                   Gdiplus::UnitPixel);
+        if (obj.font->GetLastStatus() != Gdiplus::Ok) return TextRef{};
+        obj.format = std::make_unique<Gdiplus::StringFormat>();
+        obj.format->SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+        if (use == FmtUse::Draw) {
+            obj.format->SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+            obj.format->SetAlignment(align);
+            obj.format->SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        }
+        if (text_cache_.size() >= kTextCacheCap) text_cache_.pop_back();
+        text_cache_.insert(text_cache_.begin(), std::move(obj));
+        return TextRef{text_cache_.front().font.get(), text_cache_.front().format.get()};
+    }
+
     void DrawText(Gdiplus::Graphics& g, const std::wstring& text, const Gdiplus::RectF& box, float size_px,
                   Gdiplus::FontStyle style, const Gdiplus::Color& color,
                   Gdiplus::StringAlignment align = Gdiplus::StringAlignmentNear) {
         if (text.empty()) return;
-        Gdiplus::Font font(family_.get(), size_px, style, Gdiplus::UnitPixel);
-        if (font.GetLastStatus() != Gdiplus::Ok) return;
-        Gdiplus::StringFormat format;
-        format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-        format.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-        format.SetAlignment(align);
-        format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        const TextRef t = TextFor(size_px, style, align, FmtUse::Draw);
+        if (t.font == nullptr) return;
         // 全透明模式下没有底，白字压在亮壁纸上会糊成一片。
         // 做法是两层黑投影：一层贴边（勾轮廓）、一层偏移更大更散（压背景）。
         // 单层 55% 实测在浅色桌面上仍然发飘，读长标题很吃力。
@@ -1344,25 +1487,24 @@ private:
             const Gdiplus::SolidBrush hard(
                 Gdiplus::Color(Clamp8(static_cast<int>(base * 0.85f)), 0, 0, 0));
             const float dy = (std::max)(1.0f, size_px * 0.13f);
-            g.DrawString(text.c_str(), -1, &font,
-                         Gdiplus::RectF(box.X, box.Y + dy * 2.0f, box.Width, box.Height), &format,
+            g.DrawString(text.c_str(), -1, t.font,
+                         Gdiplus::RectF(box.X, box.Y + dy * 2.0f, box.Width, box.Height), t.format,
                          &soft);
-            g.DrawString(text.c_str(), -1, &font, Gdiplus::RectF(box.X, box.Y + dy, box.Width,
-                                                                box.Height),
-                         &format, &hard);
+            g.DrawString(text.c_str(), -1, t.font, Gdiplus::RectF(box.X, box.Y + dy, box.Width,
+                                                                 box.Height),
+                         t.format, &hard);
         }
         Gdiplus::SolidBrush brush(color);
-        g.DrawString(text.c_str(), -1, &font, box, &format, &brush);
+        g.DrawString(text.c_str(), -1, t.font, box, t.format, &brush);
     }
 
-    static float MeasureText(Gdiplus::Graphics& g, Gdiplus::FontFamily* family, const std::wstring& text,
-                             float size_px, Gdiplus::FontStyle style) {
+    float MeasureText(Gdiplus::Graphics& g, const std::wstring& text,
+                      float size_px, Gdiplus::FontStyle style) {
         if (text.empty()) return 0.0f;
-        Gdiplus::Font font(family, size_px, style, Gdiplus::UnitPixel);
+        const TextRef t = TextFor(size_px, style, Gdiplus::StringAlignmentNear, FmtUse::Measure);
+        if (t.font == nullptr) return 0.0f;
         Gdiplus::RectF bound;
-        Gdiplus::StringFormat format;
-        format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-        g.MeasureString(text.c_str(), -1, &font, Gdiplus::PointF(0, 0), &format, &bound);
+        g.MeasureString(text.c_str(), -1, t.font, Gdiplus::PointF(0, 0), t.format, &bound);
         return bound.Width;
     }
 
@@ -1380,6 +1522,24 @@ private:
             FillRounded(g, bar, bar_w * 0.5f,
                         Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.88f)), 255, 255, 255));
         }
+    }
+
+    // 「还有 N 件」角标。原先 DrawCompact 与 DrawCompactAgent 各抄了一份完全相同的
+    // 12 行（同样的 16px 高度、10.5px 粗体、0.24 底、238/241/248 前景），
+    // 改一处必然漏另一处。两个调用点的后续右移量并不相同（8 / 7 逻辑像素），
+    // 所以这里只负责画，把角标矩形交回调用方决定接下来的排版。
+    Gdiplus::RectF DrawMoreBadge(Gdiplus::Graphics& g, const Gdiplus::RectF& pill, float right_edge,
+                                 int more_count, BYTE alpha, float scale) {
+        const std::wstring label = L"+" + std::to_wstring(more_count);
+        const float bh = 16.0f * scale;
+        const float bw = MeasureText(g, label, 10.5f * scale, Gdiplus::FontStyleBold) + 12.0f * scale;
+        const Gdiplus::RectF badge(right_edge - bw, pill.Y + (pill.Height - bh) * 0.5f, bw, bh);
+        FillRounded(g, badge, bh * 0.5f,
+                    Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.24f)), 255, 255, 255));
+        DrawText(g, label, badge, 10.5f * scale, Gdiplus::FontStyleBold,
+                 Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.96f)), 238, 241, 248),
+                 Gdiplus::StringAlignmentCenter);
+        return badge;
     }
 
     void DrawCompact(Gdiplus::Graphics& g, const CapsuleView& v, const Gdiplus::RectF& pill, BYTE alpha,
@@ -1405,24 +1565,15 @@ private:
         DrawChip(g, v.kind, chip, chip_size, alpha, v.cover_path);
 
         const std::wstring meta = Widen(v.meta);
-        const float meta_w = MeasureText(g, family_.get(), meta, 11.5f * scale, Gdiplus::FontStyleRegular);
+        const float meta_w = MeasureText(g, meta, 11.5f * scale, Gdiplus::FontStyleRegular);
         const float right_pad = 18.0f * scale;
         float right_edge = pill.X + pill.Width - right_pad;
 
         // 「还有 N 件」的角标：双指不了，双击才铺开，所以必须让它自己说出来。
         if (v.more_count > 0) {
-            const std::wstring label = L"+" + std::to_wstring(v.more_count);
-            const float bh = 16.0f * scale;
-            const float bw = MeasureText(g, family_.get(), label, 10.5f * scale,
-                                         Gdiplus::FontStyleBold) +
-                             12.0f * scale;
-            const Gdiplus::RectF badge(right_edge - bw, pill.Y + (pill.Height - bh) * 0.5f, bw, bh);
-            FillRounded(g, badge, bh * 0.5f,
-                        Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.24f)), 255, 255, 255));
-            DrawText(g, label, badge, 10.5f * scale, Gdiplus::FontStyleBold,
-                     Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.96f)), 238, 241, 248),
-                     Gdiplus::StringAlignmentCenter);
-            right_edge -= bw + 8.0f * scale;
+            const Gdiplus::RectF badge =
+                DrawMoreBadge(g, pill, right_edge, v.more_count, alpha, scale);
+            right_edge -= badge.Width + 8.0f * scale;
         }
 
         if (!meta.empty()) {
@@ -1476,23 +1627,14 @@ private:
         // 「还有 N 件」：小圆最多两个，第四个及以后只靠这个角标提示。
         // 顺序是 从右往左：心跳 → +N → 进度，视觉上「越靠右越外围」。
         if (v.more_count > 0) {
-            const std::wstring label = L"+" + std::to_wstring(v.more_count);
-            const float bh = 16.0f * scale;
-            const float bw = MeasureText(g, family_.get(), label, 10.5f * scale,
-                                         Gdiplus::FontStyleBold) +
-                             12.0f * scale;
-            const Gdiplus::RectF badge(right_edge - bw, pill.Y + (pill.Height - bh) * 0.5f, bw, bh);
-            FillRounded(g, badge, bh * 0.5f,
-                        Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.24f)), 255, 255, 255));
-            DrawText(g, label, badge, 10.5f * scale, Gdiplus::FontStyleBold,
-                     Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.96f)), 238, 241, 248),
-                     Gdiplus::StringAlignmentCenter);
+            const Gdiplus::RectF badge =
+                DrawMoreBadge(g, pill, right_edge, v.more_count, alpha, scale);
             right_edge = badge.X - 7.0f * scale;
         }
 
         if (!v.agent_meta.empty()) {
             const std::wstring meta = Widen(v.agent_meta);
-            const float meta_w = MeasureText(g, family_.get(), meta, 10.5f * scale,
+            const float meta_w = MeasureText(g, meta, 10.5f * scale,
                                              Gdiplus::FontStyleBold);
             Gdiplus::RectF meta_box(right_edge - meta_w, pill.Y, meta_w, pill.Height);
             DrawText(g, meta, meta_box, 10.5f * scale, Gdiplus::FontStyleBold,
@@ -2026,7 +2168,7 @@ private:
                                    : v.agent_state == "waiting" ? L"等待输入"
                                                                 : L"已完成";
             const std::wstring text(label);
-            const float bw = MeasureText(g, family_.get(), text, 10.0f * scale,
+            const float bw = MeasureText(g, text, 10.0f * scale,
                                          Gdiplus::FontStyleBold) +
                              18.0f * scale;
             const float bh = 18.0f * scale;
@@ -2318,8 +2460,10 @@ private:
     // DrawText 有几十个调用点，漏一处就在那块文字上糊掉，且很难肉眼发现。
     bool text_shadow_ = false;
     std::unique_ptr<Gdiplus::FontFamily> family_;
-    std::unique_ptr<Gdiplus::Bitmap> shadow_;   // 模糊投影缓存（DropShadow 专用）
-    std::uint32_t shadow_key_ = 0;              // 0 表示无缓存
+    std::vector<TextObj> text_cache_;              // MRU：下标 0 最新
+    std::vector<ShadowSlot> shadow_slots_;         // MRU：下标 0 最新，按尺寸而非 alpha 索引
+    std::vector<std::uint8_t> blur_buf_;           // 模糊主缓冲（复用，避免每帧分配）
+    std::vector<std::uint8_t> blur_tmp_;           // 单轴中间缓冲（复用）
     std::unique_ptr<Gdiplus::Bitmap> cover_bitmap_;
     std::string cover_loaded_;
 };
