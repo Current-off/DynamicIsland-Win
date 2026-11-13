@@ -769,11 +769,11 @@ private:
         const bool use_glass = mode != 2 && glass.backdrop != nullptr;
         if (use_glass) {
             DrawGlassBody(g, path, r, alpha, glass);
-            DrawRim(g, path, r, alpha, scale, true);
+            DrawRim(g, path, r, alpha, scale, true, radius);
             DrawInnerRim(g, r, radius, alpha, scale, true);
         } else {
             DrawOpaqueBody(g, path, r, alpha);
-            DrawRim(g, path, r, alpha, scale, false);
+            DrawRim(g, path, r, alpha, scale, false, radius);
             DrawInnerRim(g, r, radius, alpha, scale, false);
         }
     }
@@ -1052,48 +1052,48 @@ private:
     // 把亮度压进顶部 22%，侧边就自然暗下去，只剩顶部一道受光。
     // glassy：玻璃款的顶边要更亮更"锐"（真实玻璃边缘会折射出一条亮线），
     // 不透明款保持原来的低调边，否则深色胶囊会像镀了铬。
+    // 边框分两层画，因为**单个竖直渐变分不清「顶边」和「竖边」**：
+    // 想照亮圆角就得拉长亮区，可竖边也跟着亮，浅壁纸上变成"里面又描一道亮边"。
+    //  层 1：整圈均匀的淡描边 —— 保证任何角度都有连续边界，圆角不再显得断开；
+    //  层 2：只在顶部一条带（高度 = 圆角半径，正好覆盖两端圆弧）叠高光，
+    //        渐变的末端色等于层 1 的底色，所以带的下沿没有接缝。
+    // 竖边只受层 1 影响，因此不会被点亮。
     static void DrawRim(Gdiplus::Graphics& g, const Gdiplus::GraphicsPath& path,
-                        const Gdiplus::RectF& r, BYTE alpha, float scale, bool glassy) {
+                        const Gdiplus::RectF& r, BYTE alpha, float scale, bool glassy,
+                        float radius) {
         const BYTE solid = Clamp8(static_cast<int>(alpha * 0.97f));
-        Gdiplus::LinearGradientBrush rim(
-            Gdiplus::PointF(r.X, r.Y), Gdiplus::PointF(r.X, r.Y + r.Height),
-            Gdiplus::Color(solid, 74, 74, 86), Gdiplus::Color(solid, 9, 9, 12));
-        Gdiplus::Color stops[4];
-        Gdiplus::REAL at[4] = {0.0f, 0.20f, 0.60f, 1.0f};
-        if (glassy) {
-            stops[0] = Gdiplus::Color(solid, 176, 186, 206);
-            stops[1] = Gdiplus::Color(solid, 88, 91, 104);
-            stops[2] = Gdiplus::Color(solid, 26, 26, 32);
-            stops[3] = Gdiplus::Color(solid, 14, 14, 18);
-            at[1] = 0.16f;
-            at[2] = 0.52f;
-        } else {
-            // 竖直渐变的**亮区只能覆盖顶部一小段**。
-            // 上一版把亮区拉到 46% 想去救圆角，结果竖边也跟着亮起来：
-            // 实机截图上「胶囊侧面 7px 处 = 76，紧贴边缘的本体 = 27」，
-            // 在浅色壁纸上就是"里面又描了一道亮边"，成了双重边。
-            // 圆角偏暗的根子是「竖直渐变分不清顶边与竖边」，不是亮区不够长 ——
-            // 要同时满足，得换 PathGradientBrush（按到顶边的距离），
-            // 而不是继续拉长线性渐变。
-            stops[0] = Gdiplus::Color(solid, 78, 78, 90);
-            stops[1] = Gdiplus::Color(solid, 40, 40, 48);
-            stops[2] = Gdiplus::Color(solid, 16, 16, 21);
-            stops[3] = Gdiplus::Color(solid, 9, 9, 12);
-            at[1] = 0.20f;
-            at[2] = 0.60f;
-        }
-        rim.SetInterpolationColors(stops, at, 4);
+        const Gdiplus::Color base = glassy ? Gdiplus::Color(solid, 104, 110, 126)
+                                           : Gdiplus::Color(solid, 54, 54, 64);
+        const Gdiplus::Color top = glassy ? Gdiplus::Color(solid, 176, 186, 206)
+                                          : Gdiplus::Color(solid, 88, 88, 100);
         // 描边宽度跟着胶囊尺寸走，不能写死。写死 1.5*scale 时：紧凑态(46 高)
         // 占比合适，展开态(124 高)还是那 1px —— 在弧线上被抗锯齿摊成半透明，
         // 看起来就是"圆角没有描边"。同文件里液态玻璃的镜面线本来就是按高度算的
         //（r.Height * 0.024f），这里却固定，属于同一圈边框两套宽度逻辑。
         const float rim_w = std::clamp(r.Height * 0.024f, 1.5f * scale, 3.2f * scale);
-        Gdiplus::Pen pen(&rim, rim_w);
         // 描边必须裁到胶囊内侧再画。Pen 以路径为中心线，默认有一半落在路径外；
         // 那半个像素在浅色壁纸上就是一圈灰线，看起来像胶囊被切了一刀。
         const Gdiplus::GraphicsState state = g.Save();
         g.SetClip(&path);
-        g.DrawPath(&pen, &path);
+        {
+            Gdiplus::SolidBrush brush(base);
+            Gdiplus::Pen pen(&brush, rim_w);
+            g.DrawPath(&pen, &path);
+        }
+        {
+            const float band = (std::max)(radius, rim_w * 2.0f);
+            if (band > 0.5f) {
+                Gdiplus::GraphicsPath band_path;
+                band_path.AddRectangle(Gdiplus::RectF(r.X, r.Y, r.Width, band));
+                const Gdiplus::GraphicsState inner = g.Save();
+                g.SetClip(&band_path, Gdiplus::CombineModeIntersect);
+                Gdiplus::LinearGradientBrush hi(Gdiplus::PointF(r.X, r.Y),
+                                                Gdiplus::PointF(r.X, r.Y + band), top, base);
+                Gdiplus::Pen pen(&hi, rim_w);
+                g.DrawPath(&pen, &path);
+                g.Restore(inner);
+            }
+        }
         g.Restore(state);
     }
 
