@@ -47,6 +47,10 @@ struct Layout {
     static constexpr float kExpandedW = 420.0f;
     static constexpr float kExpandedH = 124.0f;       // 带进度条（媒体/下载）
     static constexpr float kExpandedShortH = 96.0f;   // 无进度条（复制/通知/设备）
+    // 日历只有「图标 + 标题 + 时间地点」三行，且没有页脚与操作区。
+    // 用 96 会空出下面三分之一（实机反馈"大岛下方太空"）；按内容实测收到 80，
+    // 上下各留 16 的 margin 后刚好贴满。
+    static constexpr float kCalendarExpandedH = 80.0f;
     static constexpr float kExpandedLyricH = 196.0f;  // 媒体展开态：额外容纳三行歌词
     // 编码 Agent 展开态：标题 + 任务 + 当前动作 + 清单（最多 4 行）+ 页脚。
     // 高度按「实际有几行」算（kAgentBaseH + n*kAgentRowH）：只有 3 条清单时
@@ -1114,7 +1118,23 @@ private:
         const float cy = box.Y + box.Height * 0.5f;
         const float s = box.Width;
 
-        if (provider == "claude") {
+        // provider 字段来自各家 CLI，写法并不统一（"claude" / "Claude Code" /
+        // "claude-code" / "anthropic"）。原来用精确相等判断，写法稍有出入就落到
+        // 末尾的通用字形 —— 所有 agent 长得一模一样，正是"图标没法识别"的根因。
+        // 改成小写化后按关键词包含匹配，写法变了也不会失配。
+        std::string p;
+        p.reserve(provider.size());
+        for (char c : provider) {
+            p.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c);
+        }
+        const bool is_claude = p.find("claude") != std::string::npos ||
+                               p.find("anthropic") != std::string::npos;
+        const bool is_codex = p.find("codex") != std::string::npos ||
+                              p.find("openai") != std::string::npos;
+        const bool is_gemini = p.find("gemini") != std::string::npos ||
+                               p.find("google") != std::string::npos;
+
+        if (is_claude) {
             // 六向星芒：Anthropic 的记号是一朵放射状的花。
             Gdiplus::Pen pen(color, std::max(1.5f, s * 0.075f));
             pen.SetStartCap(Gdiplus::LineCapRound);
@@ -1128,7 +1148,7 @@ private:
             }
             return;
         }
-        if (provider == "codex") {
+        if (is_codex) {
             // >_ 提示符：终端里 agent 的通用符号，和「它在跑命令」的语义一致。
             Gdiplus::Pen pen(color, std::max(1.6f, s * 0.085f));
             pen.SetStartCap(Gdiplus::LineCapRound);
@@ -1138,7 +1158,7 @@ private:
             g.DrawLine(&pen, cx + s * 0.02f, cy + s * 0.11f, cx + s * 0.21f, cy + s * 0.11f);
             return;
         }
-        if (provider == "gemini") {
+        if (is_gemini) {
             // 四角星（sparkle）：两枚细长菱形叠成一个星。
             Gdiplus::SolidBrush brush(color);
             Gdiplus::PointF tall[4] = {{cx, cy - s * 0.30f},
