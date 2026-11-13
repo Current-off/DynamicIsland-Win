@@ -116,6 +116,9 @@ $targets = @(
     @{ name = 'notif_probe';      src = 'probes/notif_probe.cpp';          libs = $guiLibs },
     @{ name = 'appicon_probe';    src = 'probes/appicon_probe.cpp';        libs = $guiLibs },
     @{ name = 'lyrics_probe';     src = 'probes/lyrics_probe.cpp';         libs = $guiLibs },
+    # 把每一种展开态各渲染一张 PNG：判断「底部太空 / 内容被裁切」只能看，
+    # 代码里读不出留白。已经靠它定位过两次（日历、通知/剪贴板/电量）。
+    @{ name = 'layout_probe';     src = 'probes/layout_probe.cpp';         libs = $guiLibs },
     @{ name = 'hanzi_probe';      src = 'probes/hanzi_probe.cpp';          libs = $guiLibs },
     @{ name = 'cache_probe';      src = 'probes/cache_probe.cpp';          libs = $guiLibs }
 )
