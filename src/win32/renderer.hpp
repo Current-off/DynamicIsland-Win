@@ -1094,13 +1094,23 @@ private:
     // 各家 Agent 的品牌色。取的是各家产品标识的主色（饱和度压低一点，
     // 因为底是一块深色玻璃，原色直接上会「跳出屏幕」）。
     static Gdiplus::Color AgentAccentFor(const std::string& provider) {
-        if (provider == "claude") return Gdiplus::Color(255, 214, 116, 88);     // Anthropic 陶土橙
-        if (provider == "codex") return Gdiplus::Color(255, 24, 166, 133);      // OpenAI 青绿
-        if (provider == "gemini") return Gdiplus::Color(255, 88, 132, 240);     // Google 蓝
-        if (provider == "workbuddy") return Gdiplus::Color(255, 96, 104, 236);  // WorkBuddy 靛蓝
-        if (provider == "zcode") return Gdiplus::Color(255, 74, 124, 232);      // ZCode 蓝
-        if (provider == "cursor") return Gdiplus::Color(255, 128, 134, 152);    // Cursor 中性灰
-        if (provider == "pi") return Gdiplus::Color(255, 152, 122, 240);        // Pi 紫
+        // 与 DrawAgentGlyph 同一套归一化。原来这里是精确相等，结果**同一个 Claude
+        // 在不同写法下拿到不同颜色**（"claude" 陶土橙 vs "Claude Code" 落到默认紫）——
+        // 多 provider 对照图里一眼就能看出来，这也是"图标认不出"的一半原因：
+        // 颜色本来是比字形更强的识别信号，结果它自己先不一致了。
+        std::string p;
+        p.reserve(provider.size());
+        for (char c : provider) {
+            p.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c);
+        }
+        const auto has = [&p](const char* key) { return p.find(key) != std::string::npos; };
+        if (has("claude") || has("anthropic")) return Gdiplus::Color(255, 214, 116, 88);  // 陶土橙
+        if (has("codex") || has("openai")) return Gdiplus::Color(255, 24, 166, 133);      // 青绿
+        if (has("gemini") || has("google")) return Gdiplus::Color(255, 88, 132, 240);     // Google 蓝
+        if (has("workbuddy")) return Gdiplus::Color(255, 96, 104, 236);                   // 靛蓝
+        if (has("zcode")) return Gdiplus::Color(255, 74, 124, 232);                       // ZCode 蓝
+        if (has("cursor")) return Gdiplus::Color(255, 128, 134, 152);                     // 中性灰
+        if (p == "pi") return Gdiplus::Color(255, 152, 122, 240);  // 精确匹配：子串会误伤
         return AccentFor("agent");
     }
 
