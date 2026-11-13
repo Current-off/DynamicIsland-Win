@@ -2770,6 +2770,13 @@ int Run() {
         const bool bar_enabled = rules.Config().sleep_bar;
         const bool sleeping = want_sleep && bar_enabled;
         const bool hidden = !has_island(frame) || (want_sleep && !bar_enabled);
+
+        // 「没有任务」也要能看出它还在跑：给一枚与休眠条同高的小圆（直径 =
+        // kSleepBarH），材质与休眠条一致。没有它，胶囊完全透明时用户无法区分
+        // "没事可显示"和"程序已经退了"——这是实机试用里最直接的困惑。
+        // 跟随 sleep_bar 开关：明确关掉"待机提示"的人，同样不希望屏幕上留一个点。
+        // 具体的尺寸覆盖在 view 构建之后做（view 在这里还没声明）。
+        const bool alive_dot = hidden && bar_enabled;
         // 入睡时把展开 / 一览收掉：醒来应该是紧凑态，而不是「一睁眼就是半个屏幕」。
         if (sleeping != was_sleeping) {
             if (sleeping) {
@@ -2864,7 +2871,14 @@ int Run() {
             overview_launch.push_back(opt.overview_launch.empty() ? item.launch : opt.overview_launch);
         }
         // 休眠时钟常驻：无活动也不把 alpha 目标压到 0。
-        const bool want_visible = !hidden || view.sleep_bar;
+        // 存活态：把胶囊缩成一枚与休眠条同高的圆点（正方形 + DrawPill 的
+        // min(h*0.5, 28) 圆角 = 天然正圆），内容层整段跳过。
+        if (alive_dot) {
+            view.alive_dot = true;
+            view.content_w = Layout::kSleepBarH;
+            view.content_h = Layout::kSleepBarH;
+        }
+        const bool want_visible = !hidden || view.sleep_bar || alive_dot;
         const bool anim_moved =
             anim.Approach(view.content_w, view.content_h, view.detached_w,
                           want_visible ? 1.0 : 0.0, std::min(dt, 0.1));
@@ -2889,7 +2903,17 @@ int Run() {
             drawn.content_h = anim.h;
             drawn.detached_w = detach;
             // 休眠态整体半透明：它不是要你看的内容，只是一条待机提示。
-            drawn.alpha = anim.alpha * (view.sleep_bar ? Layout::kSleepBarAlpha : 1.0f);
+            // 存活点用极慢的呼吸（wave_phase = elapsed*6，再乘 0.35 → 约 3s 一周期）：
+            // 完全静止的 10px 圆点容易被当成屏幕上的坏点，会呼吸的不会。
+            // 范围压在 kSleepBarAlpha 的 0.72~1.0 倍，肉眼是"若隐若现"而不是明暗闪烁。
+            const float alive_breath =
+                view.alive_dot
+                    ? (0.72f + 0.28f *
+                                   static_cast<float>(0.5 + 0.5 * std::sin(view.wave_phase * 0.35)))
+                    : 1.0f;
+            drawn.alpha = anim.alpha * (view.alive_dot
+                                            ? Layout::kSleepBarAlpha * alive_breath
+                                            : (view.sleep_bar ? Layout::kSleepBarAlpha : 1.0f));
 
             // 命中几何用「本帧真正画出来的」胶囊尺寸，和 renderer 同源函数，
             // 保证按钮画在哪就能点在哪。窗口消息与主循环同线程，无需加锁。

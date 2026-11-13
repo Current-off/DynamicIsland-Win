@@ -199,6 +199,9 @@ struct CapsuleView {
 
     // 休眠态：无活动时不完全透明，画一枚只显示 HH:MM 的极简时钟药丸。
     bool sleep_bar = false;
+    // 「存活态」：没有任何任务，但进程在跑。外观是与休眠条同高的小圆，
+    // 用来回答"它还在不在"——完全透明时用户无从分辨"没任务"和"已退出"。
+    bool alive_dot = false;
     // 展开态歌词区（三行滚动）。lyric_status: loading / ok / none / error。
     bool lyric_active = false;
     std::string lyric_prev;
@@ -434,7 +437,7 @@ public:
                 for (const auto& box : dboxes) DrawPill(g, box, a, scale, glass, v.opacity_mode);
             }
 
-            if (phase != Phase::Chrome) {
+            if (phase != Phase::Chrome && !v.alive_dot) {
                 if (v.sleep_bar) {
                     DrawSleepBar(g, v, pill, a, scale, glassy_text);
                 } else if (v.expanded) {
