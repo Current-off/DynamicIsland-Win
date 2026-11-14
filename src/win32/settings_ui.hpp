@@ -138,8 +138,9 @@ enum class Hit : int {
     CaptureRefreshDec, CaptureRefreshInc,
     TargetMonitor0, TargetMonitor1, TargetMonitor2,
     MonitorIndexDec, MonitorIndexInc,
-    // 预设页
-    PresetSaveAs, PresetRestore, PresetExport, PresetImport
+    // 预设页：四张预设卡 + 恢复出厂。卡片同组连续，布局用 Preset0+i 分派。
+    Preset0, Preset1, Preset2, Preset3,
+    PresetReset
 };
 
 struct Zone {
@@ -166,6 +167,15 @@ struct State {
     RECT drag_window{};
     std::vector<Zone> zones;
     int page = 0;  // 当前分页：0 外观 / 1 行为 / 2 性能 / 3 预设
+
+    // ---- 滚动 ----
+    // 1080p + 150% 缩放下「行为」页比工作区还高，固定高度会把底部按钮顶出屏幕。
+    // 所以标题与 Tab 固定、按钮固定、中间内容区可滚（滚轮 + 右侧细滚动条）。
+    int max_height = 0;  // 工作区允许的最大高度，0 = 不限制
+    int scroll = 0;      // 内容区上移量（物理像素）
+    int max_scroll = 0;  // 由 BuildZones 算出
+    int view_top = 0;    // 内容视口上沿
+    int view_h = 0;      // 内容视口高度
 };
 
 inline int S(int value, int dpi) { return ::MulDiv(value, dpi, 96); }
@@ -345,8 +355,10 @@ inline void RowText(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, const wchar_
 
 inline void SectionTitle(Gdiplus::Graphics& g, const wchar_t* text, float x, float y,
                          float scale) {
+    // 10.5px 的小字在深底上到 (130,132,146) 只有约 3.9:1，达不到 AA 的 4.5:1，
+    // 章节标题是层级线索，不能比正文更糊。
     Text(g, text, Gdiplus::RectF(x, y, 400.0f * scale, 18.0f * scale), 10.5f * scale, true,
-         Rgba(235, 130, 132, 146));
+         Rgba(240, 152, 155, 172));
 }
 
 inline void Hairline(Gdiplus::Graphics& g, float x0, float x1, float y) {
@@ -533,6 +545,9 @@ inline void DrawTab(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, const wchar_
 // 布局与命中**同一份数据**：BuildZones() 一次算出所有矩形，Paint() 只照着画，
 // 鼠标命中只查这张表。分两处算的话，只要有一处改了就必然错位 ——
 // 「看得见点不到」这类 bug 全是这么来的。
+//
+// 返回值是这个分页真正需要的内容高度（含底部按钮与路径那一行）。
+// 四页内容长短差很多，固定高度会在短页留一大片空白，所以窗口高度跟着它走。
 inline int BuildZones(State& st, std::vector<Zone>& zones) {
     zones.clear();
     const int dpi = st.dpi;
@@ -610,9 +625,10 @@ inline int BuildZones(State& st, std::vector<Zone>& zones) {
     };
 
     int y = S(132, dpi);  // 内容区起点（Tab 下方）
+    const std::size_t content_begin = zones.size();  // 之后的区域都跟着滚动走
     switch (st.page) {
-        case 0: {  // ---- 外观：原有「外观」三件 + 六件新控件 ----
-            y += S(20, dpi);  // 「外观」分组标题占位
+        case 0: {  // ---- 外观：材质 / 位置 / 玻璃 + 主题 / 强调色 / 缩放 / 字号 / 圆角 / 间距 ----
+            y += S(22, dpi);  // 「外观」分组标题占位
             add_segment(Hit::Opacity0, 3, y); y += row_step;
             add_segment(Hit::Anchor0, 3, y); y += row_step;
             add_toggle(Hit::Glass, y); y += row_step;
@@ -624,14 +640,14 @@ inline int BuildZones(State& st, std::vector<Zone>& zones) {
             add_stepper(Hit::TopOffsetDec, Hit::TopOffsetInc, y); y += row_step;
             break;
         }
-        case 1: {  // ---- 行为：原有「响应哪些操作」「其他」+ 新自动隐藏/让路控件 ----
-            y += S(20, dpi);  // 「响应哪些操作」分组标题
+        case 1: {  // ---- 行为：响应哪些操作 + 其他 + 自动隐藏与让路 ----
+            y += S(22, dpi);  // 「响应哪些操作」分组标题
             {
                 Hit hits[7];
                 for (int i = 0; i < 7; ++i) hits[i] = EventHit(i);
                 y = add_two_col(hits, 7, y, col_h);
             }
-            y += S(12, dpi);
+            y += S(14, dpi);
             y += S(20, dpi);  // 「其他」分组标题
             add_toggle(Hit::Fullscreen, y); y += row_step;
             add_toggle(Hit::Secret, y); y += row_step;
@@ -667,49 +683,548 @@ inline int BuildZones(State& st, std::vector<Zone>& zones) {
             break;
         }
         case 2: {  // ---- 性能 ----
-            y += S(20, dpi);  // 「性能」分组标题
+            y += S(22, dpi);  // 「性能」分组标题
             add_segment(Hit::GlassQuality0, 4, y); y += row_step;
             add_stepper(Hit::CaptureRefreshDec, Hit::CaptureRefreshInc, y); y += row_step;
             add_segment(Hit::TargetMonitor0, 3, y); y += row_step;
             add_stepper(Hit::MonitorIndexDec, Hit::MonitorIndexInc, y); y += row_step;
             break;
         }
-        case 3: {  // ---- 预设 ----
-            y += S(96, dpi);  // 当前预设名 + 说明（纯文字，不占命中区）
-            const int bw = S(150, dpi);
-            const int bh = S(34, dpi);
-            const int bgap = S(12, dpi);
-            int x = pad;
-            zones.push_back({Hit::PresetSaveAs, {x, y, x + bw, y + bh}});
-            x += bw + bgap;
-            zones.push_back({Hit::PresetRestore, {x, y, x + bw, y + bh}});
-            y += S(46, dpi);
-            // 「导出 / 导入」画成禁用态，不生成命中区 —— 真不可点，不是假按钮。
+        case 3: {  // ---- 预设：2×2 卡片 + 恢复出厂 ----
+            y += S(22, dpi);
+            {
+                const int gap = S(12, dpi);
+                const int cw = (content_w - gap) / 2;
+                const int ch = S(78, dpi);
+                for (int i = 0; i < 4; ++i) {
+                    const int col = i % 2;
+                    const int row = i / 2;
+                    const int x = pad + col * (cw + gap);
+                    const int cy = y + row * (ch + gap);
+                    zones.push_back({HitAt(Hit::Preset0, i), {x, cy, x + cw, cy + ch}});
+                }
+                y += 2 * (ch + gap);
+            }
+            zones.push_back({Hit::PresetReset, {pad, y, pad + S(150, dpi), y + S(34, dpi)}});
             y += S(34, dpi);
-            y += S(26, dpi);  // 「未启用」说明
             break;
         }
         default: break;
     }
 
-    // 底部按钮固定在统一高度：与当前页无关，四页切换时按钮不跳动。
-    // 各页控件都从 y=132 起排，最满的「行为」页也够不到这里，不会重叠。
-    const int bottom_y = S(820, dpi);
+    // ---- 高度、视口与滚动 ----
+    //
+    // st.height == 0 表示「按内容自然高度开窗」（第一次调用时用这个探高度）；
+    // 否则按给定高度排，并把放不下的内容交给滚动。
     const int btn_h = S(36, dpi);
+    const int footer_h = S(18, dpi) + btn_h + S(42, dpi);  // 按钮 + 底部路径那一行
+    const int natural_h = y + footer_h;
+    int window_h = (st.height > 0) ? st.height : natural_h;
+    if (st.max_height > 0 && window_h > st.max_height) window_h = st.max_height;
+
+    const int view_top = S(132, dpi);
+    const int btn_y = window_h - S(42, dpi) - btn_h;
+    const int view_bottom = btn_y - S(14, dpi);
+    st.view_top = view_top;
+    st.view_h = (std::max)(view_bottom - view_top, 0);
+    st.max_scroll = (std::max)(0, (y - view_top) - st.view_h);
+    if (st.scroll > st.max_scroll) st.scroll = st.max_scroll;
+    if (st.scroll < 0) st.scroll = 0;
+
+    // 内容区整体上移，并裁到视口内 —— 不裁的话滚出去的行会盖住底部按钮，
+    // 于是「点保存」变成点到一个已经看不见的开关。
+    for (std::size_t i = content_begin; i < zones.size(); ++i) {
+        RECT& r = zones[i].rc;
+        r.top -= st.scroll;
+        r.bottom -= st.scroll;
+        if (r.top < view_top) r.top = view_top;
+        if (r.bottom > view_bottom) r.bottom = view_bottom;
+    }
+    zones.erase(std::remove_if(zones.begin() + static_cast<std::ptrdiff_t>(content_begin),
+                               zones.end(),
+                               [](const Zone& z) { return z.rc.bottom <= z.rc.top; }),
+                zones.end());
+
+    // 按钮钉在窗口底部，与滚动无关。
     zones.push_back({Hit::Cancel,
-                     {width - pad - S(180, dpi), bottom_y, width - pad - S(96, dpi),
-                      bottom_y + btn_h}});
+                     {width - pad - S(180, dpi), btn_y, width - pad - S(96, dpi),
+                      btn_y + btn_h}});
     zones.push_back({Hit::Save,
-                     {width - pad - S(88, dpi), bottom_y, width - pad, bottom_y + btn_h}});
-    return bottom_y + btn_h + S(24, dpi);
+                     {width - pad - S(88, dpi), btn_y, width - pad, btn_y + btn_h}});
+    return window_h;
+}
+
+// 切页后重算矩形，并把窗口高度调到这一页真正需要的高度（受 max_height 限制）。
+inline void Relayout(HWND hwnd, State& st) {
+    st.scroll = 0;
+    st.height = 0;
+    const int natural = BuildZones(st, st.zones);  // 第一遍：只求自然高度
+    st.height = (st.max_height > 0 && natural > st.max_height) ? st.max_height : natural;
+    BuildZones(st, st.zones);  // 第二遍：按最终高度排，必要时启用滚动
+    if (hwnd == nullptr) return;
+    ::SetWindowPos(hwnd, nullptr, 0, 0, st.width, st.height,
+                   SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    const int r = S(18, st.dpi);
+    HRGN region = ::CreateRoundRectRgn(0, 0, st.width + 1, st.height + 1, r * 2, r * 2);
+    if (region != nullptr) ::SetWindowRgn(hwnd, region, TRUE);  // 接管所有权，不删
+}
+
+// ---------------------------------------------------------------- 预设
+//
+// 预设只改「外观与行为」，绝不碰事件开关 / 黑名单 / 代理 / Agent 读取权限 ——
+// 那些是用户自己的决定，被「换个皮肤」顺手改掉会很恼人，而且难以察觉。
+struct PresetInfo {
+    const wchar_t* name;
+    const char* key;  // 存进 cfg.preset_name 的键（UTF-8）
+    const wchar_t* desc;
+};
+
+static const PresetInfo kPresets[4] = {
+    {L"极简", "极简", L"收成一条，几乎不出声"},
+    {L"均衡", "均衡", L"默认：该出现时才出现"},
+    {L"沉浸", "沉浸", L"常驻显示，玻璃更透"},
+    {L"节能", "节能", L"降帧降质，笔记本省电"},
+};
+
+inline int StepCorner(int cur, int delta) {
+    // 0 是哨兵值「用范式默认 28」。往下退到 8 以下就回到 0，而不是卡在 8……
+    if (cur == 0) return delta > 0 ? 8 : 0;
+    const int next = cur + delta;
+    if (next < 8) return 0;
+    return next > 40 ? 40 : next;
+}
+
+// idx: 0..3 四个预设；-1 = 恢复出厂。
+inline void ApplyPreset(RuleConfig& c, int idx) {
+    // 先把「不该被预设改动」的字段抄出来，重置后原样还回去。
+    const auto app_block = c.app_block;
+    const auto app_allow = c.app_allow;
+    const auto ext_block = c.ext_block;
+    const auto ext_allow = c.ext_allow;
+    const EventToggles events = c.events;
+    const ClipboardRule clipboard = c.clipboard;
+    const QuietHours quiet = c.quiet;
+    const std::string proxy = c.lyrics_proxy;
+    const bool agents = c.agents;
+    const bool browsers = c.browsers;
+    const bool meetings = c.meetings;
+    const bool editors = c.editors;
+    const int agent_max = c.agent_max;
+    const int agent_idle = c.agent_idle_sec;
+    const bool simplify = c.simplify_chinese;
+    const bool lyrics = c.lyrics;
+    const bool sleep_bar = c.sleep_bar;
+    const int auto_sleep = c.auto_sleep_sec;
+
+    c = RuleConfig();
+
+    c.app_block = app_block;
+    c.app_allow = app_allow;
+    c.ext_block = ext_block;
+    c.ext_allow = ext_allow;
+    c.events = events;
+    c.clipboard = clipboard;
+    c.quiet = quiet;
+    c.lyrics_proxy = proxy;
+    c.agents = agents;
+    c.browsers = browsers;
+    c.meetings = meetings;
+    c.editors = editors;
+    c.agent_max = agent_max;
+    c.agent_idle_sec = agent_idle;
+    c.simplify_chinese = simplify;
+    c.lyrics = lyrics;
+    c.sleep_bar = sleep_bar;
+    c.auto_sleep_sec = auto_sleep;
+
+    if (idx < 0 || idx >= 4) {  // 恢复出厂：上面那批字段保持原值，其余回默认
+        c.preset_name = "默认";
+        return;
+    }
+    c.preset_name = kPresets[idx].key;
+    switch (idx) {
+        case 0:  // 极简
+            c.opacity = 2;
+            c.glass = false;
+            c.ui_scale = 90;
+            c.font_offset = -1;
+            c.corner_radius = 8;
+            c.top_offset = 4;
+            c.quiet_form = 0;
+            c.auto_hide_focus = true;
+            c.auto_hide_paused = true;
+            c.auto_hide_fullscreen = true;
+            c.yield_enabled = true;
+            c.reduce_motion = true;
+            c.low_power_downgrade = true;
+            c.glass_quality = 0;
+            c.capture_refresh_ms = 4000;
+            break;
+        case 1:  // 均衡 = 出厂外观值（restore 之后本来就是默认，这里只写清意图）
+            break;
+        case 2:  // 沉浸
+            c.opacity = 0;
+            c.glass = true;
+            c.ui_scale = 105;
+            c.font_offset = 1;
+            c.corner_radius = 20;
+            c.quiet_form = 1;
+            c.auto_hide_focus = false;
+            c.auto_hide_paused = false;
+            c.auto_hide_fullscreen = false;
+            c.yield_enabled = false;
+            c.reduce_motion = false;
+            c.low_power_downgrade = false;
+            c.glass_quality = 3;
+            c.capture_refresh_ms = 1000;
+            break;
+        case 3:  // 节能
+            c.opacity = 2;
+            c.glass = false;
+            c.ui_scale = 95;
+            c.font_offset = 0;
+            c.corner_radius = 8;
+            c.quiet_form = 1;
+            c.auto_hide_focus = true;
+            c.auto_hide_paused = true;
+            c.auto_hide_fullscreen = true;
+            c.yield_enabled = true;
+            c.reduce_motion = true;
+            c.low_power_downgrade = true;
+            c.glass_quality = 0;
+            c.capture_refresh_ms = 6000;
+            break;
+        default: break;
+    }
+}
+
+inline int CurrentPreset(const RuleConfig& c) {
+    for (int i = 0; i < 4; ++i) {
+        if (c.preset_name == kPresets[i].key) return i;
+    }
+    return c.preset_name == "默认" ? 1 : -1;
 }
 
 // ---------------------------------------------------------------- 绘制
+//
+// 这里不出现任何坐标常量：所有矩形都来自 zones 表（FindRect / UnionSeg）。
+// 「画的坐标」和「点的坐标」一旦分成两份，迟早有一份忘记同步 ——
+// v0.3.0 就是这样：控件进了布局表却没人画，屏幕上只剩三个旧控件。
+// probes/settings_probe.cpp 现在会逐块比像素，专抓「有命中区但没画出来」。
+
+inline float LabelWidth(const State& st, Hit anchor, float pad, float scale) {
+    const RECT* r = FindRect(st, anchor);
+    if (r == nullptr) return 0.0f;
+    const float w = static_cast<float>(r->left) - pad - 12.0f * scale;
+    return w > 0.0f ? w : 0.0f;
+}
+
+// 标签列宽一路算到控件左沿 —— 写死比例就会把副标题截断（曾经如此）。
+inline void RowLabel(Gdiplus::Graphics& g, const State& st, Hit anchor, float pad, float scale,
+                     const wchar_t* title, const wchar_t* sub) {
+    const RECT* r = FindRect(st, anchor);
+    if (r == nullptr) return;
+    const float row_h = 46.0f * scale;
+    const float cy = static_cast<float>(r->top + r->bottom) * 0.5f;
+    RowText(g, Gdiplus::RectF(pad, cy - row_h * 0.5f, LabelWidth(st, anchor, pad, scale), row_h),
+            title, sub, scale);
+}
+
+// 开关贴在命中区右端：命中区比开关大（整行可点），这是设置界面该有的手感 ——
+// 没人愿意去瞄一个 44×24 的小方块。
+inline void ToggleAt(Gdiplus::Graphics& g, const RECT& r, bool on, bool hover, float scale) {
+    const float tw = 44.0f * scale;
+    const float th = 24.0f * scale;
+    const Gdiplus::RectF rc(
+        static_cast<float>(r.right) - tw - 2.0f * scale,
+        static_cast<float>(r.top) + (static_cast<float>(r.bottom - r.top) - th) * 0.5f, tw, th);
+    Toggle(g, rc, on, hover, scale);
+}
+
+inline void ToggleRow(Gdiplus::Graphics& g, const State& st, Hit h, bool on,
+                      const wchar_t* title, const wchar_t* sub, float pad, float scale) {
+    RowLabel(g, st, h, pad, scale, title, sub);
+    const RECT* r = FindRect(st, h);
+    if (r != nullptr) ToggleAt(g, *r, on, st.hover == h, scale);
+}
+
+inline void SegmentRow(Gdiplus::Graphics& g, const State& st, Hit base, int count, int selected,
+                       const wchar_t* const* labels, SegIcon icon, const wchar_t* title,
+                       const wchar_t* sub, float pad, float scale) {
+    RowLabel(g, st, base, pad, scale, title, sub);
+    const Gdiplus::RectF rc = UnionSeg(st, base, count);
+    if (rc.Width <= 0.0f) return;
+    const int hover = SegHover(st, base, count);
+    if (icon == SegIcon::None) {
+        const wchar_t* const* safe = labels;
+        static const wchar_t* const kEmpty[4] = {L"", L"", L"", L""};
+        if (safe == nullptr) safe = kEmpty;
+        LabeledSegment(g, rc, count, selected, hover, scale, safe);
+    } else {
+        Segment(g, rc, count, selected, hover, scale, icon);
+    }
+}
+
+inline void StepperRow(Gdiplus::Graphics& g, const State& st, Hit dec, Hit inc,
+                       const std::wstring& value, const wchar_t* title, const wchar_t* sub,
+                       float pad, float scale, bool enabled = true) {
+    RowLabel(g, st, dec, pad, scale, title, sub);
+    if (enabled) {
+        DrawStepper(g, st, dec, inc, value, scale);
+        return;
+    }
+    // 不生效时画成「灰掉的步进器」而不是干脆不画：形状还在，说明这一行确实存在，
+    // 只是要先满足上面的条件。比留一个点了没反应的按钮诚实，也比凭空消失好懂。
+    const RECT* d = FindRect(st, dec);
+    const RECT* i = FindRect(st, inc);
+    if (d == nullptr || i == nullptr) return;
+    const Gdiplus::Color faded = Rgba(110, color::kSubR, color::kSubG, color::kSubB);
+    const Gdiplus::RectF mr = ToRectF(*d);
+    const Gdiplus::RectF pr = ToRectF(*i);
+    FillRound(g, mr, mr.Height * 0.5f, Rgba(16, 255, 255, 255));
+    Text(g, L"−", mr, 14.0f * scale, false, faded, Gdiplus::StringAlignmentCenter);
+    FillRound(g, pr, pr.Height * 0.5f, Rgba(16, 255, 255, 255));
+    Text(g, L"+", pr, 14.0f * scale, false, faded, Gdiplus::StringAlignmentCenter);
+    const float vx = static_cast<float>(d->right) + 3.0f * scale;
+    const float vw = static_cast<float>(i->left - d->right) - 6.0f * scale;
+    Text(g, value,
+         Gdiplus::RectF(vx, static_cast<float>(d->top), vw, static_cast<float>(d->bottom - d->top)),
+         11.5f * scale, false, faded, Gdiplus::StringAlignmentCenter);
+}
+
+inline void SwatchRow(Gdiplus::Graphics& g, const State& st, const wchar_t* title,
+                      const wchar_t* sub, float pad, float scale) {
+    RowLabel(g, st, Hit::Accent0, pad, scale, title, sub);
+    DrawAccentSwatches(g, st, scale);
+}
+
+inline std::wstring SignedW(int v) {
+    return (v > 0 ? std::wstring(L"+") : std::wstring()) + std::to_wstring(v);
+}
+inline std::wstring PxText(int v) { return std::to_wstring(v) + L" px"; }
+inline std::wstring CornerText(int v) { return v == 0 ? std::wstring(L"自动") : PxText(v); }
+inline std::wstring MsText(int v) { return std::to_wstring(v) + L" ms"; }
+
+inline void DrawTabs(Gdiplus::Graphics& g, const State& st, float scale) {
+    for (int i = 0; i < kPageCount; ++i) {
+        const Hit h = HitAt(Hit::TabAppearance, i);
+        const RECT* r = FindRect(st, h);
+        if (r == nullptr) continue;
+        Gdiplus::RectF rc = ToRectF(*r);
+        rc.X += 2.0f * scale;
+        rc.Y += 3.0f * scale;
+        rc.Width -= 4.0f * scale;
+        rc.Height -= 6.0f * scale;
+        DrawTab(g, rc, kTabLabels[i], st.page == i, st.hover == h, scale);
+    }
+}
+
+inline void DrawPresetCard(Gdiplus::Graphics& g, const RECT& r, const PresetInfo& info,
+                           bool selected, bool hover, float scale) {
+    const Gdiplus::RectF rc = ToRectF(r);
+    FillRound(g, rc, 12.0f * scale,
+              selected ? Rgba(44, color::kAccentR, color::kAccentG, color::kAccentB)
+                       : Rgba(static_cast<BYTE>(hover ? 40 : 22), 255, 255, 255));
+    if (selected) {
+        // 左侧一条强调色竖条：选中态同时靠色与形，色弱也能分辨。
+        FillRound(g,
+                  Gdiplus::RectF(rc.X + 12.0f * scale, rc.Y + 18.0f * scale, 3.0f * scale,
+                                 rc.Height - 36.0f * scale),
+                  1.5f * scale, Rgba(255, color::kAccentR, color::kAccentG, color::kAccentB));
+    }
+    Text(g, info.name, Gdiplus::RectF(rc.X + 24.0f * scale, rc.Y + 14.0f * scale,
+                                      rc.Width - 38.0f * scale, 24.0f * scale),
+         13.0f * scale, true, Rgba(255, color::kTextR, color::kTextG, color::kTextB));
+    Text(g, info.desc, Gdiplus::RectF(rc.X + 24.0f * scale, rc.Y + 40.0f * scale,
+                                      rc.Width - 38.0f * scale, 22.0f * scale),
+         10.5f * scale, false, Rgba(214, color::kSubR, color::kSubG, color::kSubB));
+}
+
+// ---- 外观页 ----
+inline void PaintAppearance(Gdiplus::Graphics& g, const State& st, float pad, float scale) {
+    const RECT* first = FindRect(st, Hit::Opacity0);
+    if (first == nullptr) return;
+    SectionTitle(g, L"外观", pad, static_cast<float>(first->top) - 22.0f * scale, scale);
+
+    SegmentRow(g, st, Hit::Opacity0, 3, st.cfg.opacity, nullptr, SegIcon::Opacity, L"材质",
+               L"液态玻璃最透，均衡最稳，不透明任何壁纸下都读得清", pad, scale);
+    SegmentRow(g, st, Hit::Anchor0, 3, st.cfg.anchor, nullptr, SegIcon::Anchor, L"位置",
+               L"靠边时留 28px，永不越界", pad, scale);
+    ToggleRow(g, st, Hit::Glass, st.cfg.glass, L"磨砂玻璃", L"透出背后的屏幕内容",
+              pad, scale);
+    SegmentRow(g, st, Hit::Theme0, 3, st.cfg.theme, kThemeLabels, SegIcon::None, L"主题",
+               L"浅色面板配白底窗口，跟随系统按应用主题切换", pad, scale);
+    SwatchRow(g, st, L"强调色", L"进度条、波形与选中态的颜色", pad, scale);
+    StepperRow(g, st, Hit::UiScaleDec, Hit::UiScaleInc,
+               std::to_wstring(st.cfg.ui_scale) + L"%", L"界面缩放",
+               L"胶囊整体大小，80% – 140%", pad, scale);
+    StepperRow(g, st, Hit::FontOffsetDec, Hit::FontOffsetInc, SignedW(st.cfg.font_offset),
+               L"字号偏移", L"标题与副标题的字号微调", pad, scale);
+    StepperRow(g, st, Hit::CornerDec, Hit::CornerInc, CornerText(st.cfg.corner_radius),
+               L"圆角", L"「自动」= 按范式默认 28px", pad, scale);
+    StepperRow(g, st, Hit::TopOffsetDec, Hit::TopOffsetInc, PxText(st.cfg.top_offset),
+               L"距顶间距", L"胶囊离工作区顶边多远", pad, scale);
+}
+
+// ---- 行为页 ----
+inline void PaintBehavior(Gdiplus::Graphics& g, const State& st, float pad, float scale) {
+    static const wchar_t* kEventLabel[7] = {L"媒体播放", L"消息通知", L"复制 / 截图", L"文件落盘",
+                                            L"音量变化", L"电源 / 电量", L"设备接入"};
+    static const wchar_t* kEventSub[7] = {L"歌名 / 进度", L"微信、邮件等", L"文本、图片、文件",
+                                          L"下载完成", L"调音量时", L"插拔、低电量",
+                                          L"U 盘、移动硬盘"};
+
+    const RECT* ev0 = FindRect(st, EventHit(0));
+    if (ev0 != nullptr) {
+        SectionTitle(g, L"响应哪些操作", pad,
+                     static_cast<float>(ev0->top) - 22.0f * scale, scale);
+        Hit hits[7];
+        bool ons[7];
+        const EventToggles& e = st.cfg.events;
+        ons[0] = e.media;
+        ons[1] = e.notification;
+        ons[2] = e.clipboard;
+        ons[3] = e.file;
+        ons[4] = e.volume;
+        ons[5] = e.power;
+        ons[6] = e.device;
+        for (int i = 0; i < 7; ++i) hits[i] = EventHit(i);
+        DrawTwoColToggles(g, st, hits, kEventLabel, kEventSub, ons, 7, scale);
+    }
+
+    const RECT* full = FindRect(st, Hit::Fullscreen);
+    if (full != nullptr) {
+        SectionTitle(g, L"其他", pad, static_cast<float>(full->top) - 22.0f * scale, scale);
+    }
+    ToggleRow(g, st, Hit::Fullscreen, st.cfg.fullscreen_hold, L"全屏时收成一条",
+              L"看视频 / 演示时让路，点一下叫醒", pad, scale);
+    ToggleRow(g, st, Hit::Secret, st.cfg.clipboard.hide_secrets, L"隐藏疑似密码的复制内容",
+              L"检测到密钥 / 密码时只显示「已复制」", pad, scale);
+    ToggleRow(g, st, Hit::QuietOn, st.cfg.quiet.enabled, L"免打扰时段",
+              L"这段时间内不产生任何提示", pad, scale);
+
+    // 免打扰起止时间：四个 −/+ 与夹在中间的时间文本。
+    {
+        const RECT* fd = FindRect(st, Hit::QuietFromDec);
+        const RECT* fi = FindRect(st, Hit::QuietFromInc);
+        const RECT* td = FindRect(st, Hit::QuietToDec);
+        const RECT* ti = FindRect(st, Hit::QuietToInc);
+        if (fd != nullptr && fi != nullptr && td != nullptr && ti != nullptr) {
+            const Gdiplus::Color dim = st.cfg.quiet.enabled
+                                           ? Rgba(255, color::kTextR, color::kTextG, color::kTextB)
+                                           : Rgba(110, 150, 152, 164);
+            const float clock_w = F(58, st.dpi);
+            auto stepper = [&](const RECT& minus, const RECT& plus, int minutes, Hit dh, Hit ih) {
+                const Gdiplus::RectF mr = ToRectF(minus);
+                FillRound(g, mr, mr.Height * 0.5f,
+                          Rgba(static_cast<BYTE>(st.hover == dh ? 70 : 38), 255, 255, 255));
+                Text(g, L"−", mr, 14.0f * scale, false, dim, Gdiplus::StringAlignmentCenter);
+                const Gdiplus::RectF pr = ToRectF(plus);
+                FillRound(g, pr, pr.Height * 0.5f,
+                          Rgba(static_cast<BYTE>(st.hover == ih ? 70 : 38), 255, 255, 255));
+                Text(g, L"+", pr, 14.0f * scale, false, dim, Gdiplus::StringAlignmentCenter);
+                Text(g, Widen(FormatClock(minutes)),
+                     Gdiplus::RectF(mr.GetRight() + 4.0f * scale, mr.Y, clock_w, mr.Height),
+                     12.0f * scale, true, dim, Gdiplus::StringAlignmentCenter);
+            };
+            stepper(*fd, *fi, st.cfg.quiet.from_min, Hit::QuietFromDec, Hit::QuietFromInc);
+            stepper(*td, *ti, st.cfg.quiet.to_min, Hit::QuietToDec, Hit::QuietToInc);
+            const float mid =
+                (static_cast<float>(fi->right) + static_cast<float>(td->left)) * 0.5f;
+            Text(g, L"到",
+                 Gdiplus::RectF(mid - 12.0f * scale, static_cast<float>(fd->top),
+                                24.0f * scale, static_cast<float>(fd->bottom - fd->top)),
+                 10.0f * scale, false, Rgba(150, color::kSubR, color::kSubG, color::kSubB),
+                 Gdiplus::StringAlignmentCenter);
+        }
+    }
+
+    const RECT* open = FindRect(st, Hit::OpenConfig);
+    if (open != nullptr) {
+        Button(g, ToRectF(*open), L"打开配置文件（黑名单等高级项）", false,
+               st.hover == Hit::OpenConfig, scale);
+    }
+
+    const RECT* ah = FindRect(st, Hit::AutoHideFocus);
+    if (ah != nullptr) {
+        SectionTitle(g, L"自动隐藏与让路", pad, static_cast<float>(ah->top) - 22.0f * scale,
+                     scale);
+        static const wchar_t* kLabels[6] = {L"焦点离开时收起", L"暂停播放后收起",
+                                            L"全屏时收起",     L"按住让路键让路",
+                                            L"减少动效",       L"省电时降级"};
+        static const wchar_t* kSubs[6] = {L"切到别的窗口 5 秒后", L"暂停超过 10 秒",
+                                          L"整块隐藏，不只是收成一条", L"松开即恢复",
+                                          L"不播放弹入 / 位移", L"电池供电时自动降档"};
+        Hit hits[6] = {Hit::AutoHideFocus,  Hit::AutoHidePaused, Hit::AutoHideFullscreen,
+                       Hit::YieldEnabled,   Hit::ReduceMotion,   Hit::LowPowerDowngrade};
+        const bool ons[6] = {st.cfg.auto_hide_focus, st.cfg.auto_hide_paused,
+                             st.cfg.auto_hide_fullscreen, st.cfg.yield_enabled,
+                             st.cfg.reduce_motion, st.cfg.low_power_downgrade};
+        DrawTwoColToggles(g, st, hits, kLabels, kSubs, ons, 6, scale);
+    }
+
+    SegmentRow(g, st, Hit::QuietForm0, 3, st.cfg.quiet_form, kQuietFormLabels, SegIcon::None,
+               L"安静态形态", L"睡着之后留在屏幕上的那一小块", pad, scale);
+    SegmentRow(g, st, Hit::YieldKey0, 3, st.cfg.yield_key, kYieldKeyLabels, SegIcon::None,
+               L"让路键", L"按住时胶囊变淡并让鼠标穿透", pad, scale);
+}
+
+// ---- 性能页 ----
+inline void PaintPerformance(Gdiplus::Graphics& g, const State& st, float pad, float scale) {
+    const RECT* first = FindRect(st, Hit::GlassQuality0);
+    if (first == nullptr) return;
+    SectionTitle(g, L"性能", pad, static_cast<float>(first->top) - 22.0f * scale, scale);
+
+    SegmentRow(g, st, Hit::GlassQuality0, 4, st.cfg.glass_quality, kGlassQualityLabels,
+               SegIcon::None, L"玻璃质量", L"流畅省算力，极致最接近真实磨砂", pad, scale);
+    StepperRow(g, st, Hit::CaptureRefreshDec, Hit::CaptureRefreshInc,
+               MsText(st.cfg.capture_refresh_ms), L"抓屏间隔",
+               L"越小越跟手，也越费电（500 – 8000 ms）", pad, scale);
+    SegmentRow(g, st, Hit::TargetMonitor0, 3, st.cfg.target_monitor, kTargetMonitorLabels,
+               SegIcon::None, L"目标屏幕", L"多显示器时岛显示在哪一块", pad, scale);
+    StepperRow(g, st, Hit::MonitorIndexDec, Hit::MonitorIndexInc,
+               st.cfg.target_monitor == 2
+                   ? (L"第 " + std::to_wstring(st.cfg.monitor_index + 1) + L" 块")
+                   : std::wstring(L"——"),
+               L"屏幕序号", L"仅「指定序号」时生效", pad, scale,
+               st.cfg.target_monitor == 2);
+}
+
+// ---- 预设页 ----
+inline void PaintPreset(Gdiplus::Graphics& g, const State& st, float pad, float scale) {
+    const RECT* first = FindRect(st, Hit::Preset0);
+    if (first == nullptr) return;
+    SectionTitle(g, L"预设", pad, static_cast<float>(first->top) - 22.0f * scale, scale);
+
+    const int cur = CurrentPreset(st.cfg);
+    for (int i = 0; i < 4; ++i) {
+        const Hit h = HitAt(Hit::Preset0, i);
+        const RECT* r = FindRect(st, h);
+        if (r == nullptr) continue;
+        DrawPresetCard(g, *r, kPresets[i], cur == i, st.hover == h, scale);
+    }
+
+    const RECT* reset = FindRect(st, Hit::PresetReset);
+    if (reset != nullptr) {
+        Button(g, ToRectF(*reset), L"恢复出厂设置", false, st.hover == Hit::PresetReset, scale);
+        const wchar_t* cur_name = (cur >= 0) ? kPresets[cur].name : L"自定义";
+        const std::wstring note = std::wstring(L"当前：") + cur_name +
+                                  L"　·　预设只改外观与行为，事件开关、黑名单与代理不受影响";
+        Text(g, note,
+             Gdiplus::RectF(static_cast<float>(reset->right) + 14.0f * scale,
+                            static_cast<float>(reset->top),
+                            st.width - pad - static_cast<float>(reset->right) - 20.0f * scale,
+                            static_cast<float>(reset->bottom - reset->top)),
+             10.0f * scale, false, Rgba(200, color::kSubR, color::kSubG, color::kSubB));
+    }
+}
 
 inline void Paint(State& st, HDC dc, int width, int height) {
     Gdiplus::Graphics g(dc);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+    // 深色底上用 ClearType 会在笔画边缘出现彩色描边（底部那行路径最明显），
+    // 灰度抗锯齿在深底上更干净。
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
 
     const float scale = static_cast<float>(st.dpi) / 96.0f;
     const float w = static_cast<float>(width);
@@ -749,12 +1264,18 @@ inline void Paint(State& st, HDC dc, int width, int height) {
     const float pad = F(layout::kPad, st.dpi);
     const float content_w = w - pad * 2.0f;
 
-    // ---- 标题 ----
+    // ---- 标题：副标题随分页变，免得停在「外观」两个字上 ----
+    static const wchar_t* kSubtitles[kPageCount] = {
+        L"外观 · 材质、主题与整体尺寸",
+        L"行为 · 响应哪些操作、何时让路",
+        L"性能 · 玻璃质量与抓屏节奏",
+        L"预设 · 一键换一套外观与行为",
+    };
     Text(g, L"平衡岛", Gdiplus::RectF(pad, F(18, st.dpi), content_w, F(28, st.dpi)),
          17.0f * scale, true, Rgba(255, color::kTextR, color::kTextG, color::kTextB));
-    Text(g, L"外观与响应设置 · 保存后立即生效", Gdiplus::RectF(pad, F(48, st.dpi), content_w,
-                                                              F(18, st.dpi)),
-         10.5f * scale, false, Rgba(210, color::kSubR, color::kSubG, color::kSubB));
+    Text(g, kSubtitles[st.page < 0 || st.page >= kPageCount ? 0 : st.page],
+         Gdiplus::RectF(pad, F(48, st.dpi), content_w, F(18, st.dpi)), 10.5f * scale, false,
+         Rgba(210, color::kSubR, color::kSubG, color::kSubB));
 
     // 关闭 ×（两笔线，不依赖字体里的符号）
     {
@@ -770,219 +1291,84 @@ inline void Paint(State& st, HDC dc, int width, int height) {
         g.DrawLine(&pen, cx + r, cy - r, cx - r, cy + r);
     }
 
-    // ---- 用 zones 表来画：矩形全部来自布局，绘制代码里不再出现任何坐标常量 ----
-    const RECT* rc_op0 = nullptr;
-    const RECT* rc_op1 = nullptr;
-    const RECT* rc_op2 = nullptr;
-    const RECT* rc_an0 = nullptr;
-    const RECT* rc_an1 = nullptr;
-    const RECT* rc_an2 = nullptr;
-    const RECT* rc_glass = nullptr;
-    const RECT* rc_full = nullptr;
-    const RECT* rc_secret = nullptr;
-    const RECT* rc_qon = nullptr;
-    const RECT* rc_qfd = nullptr;
-    const RECT* rc_qfi = nullptr;
-    const RECT* rc_qtd = nullptr;
-    const RECT* rc_qti = nullptr;
-    const RECT* rc_open = nullptr;
-    const RECT* rc_save = nullptr;
-    const RECT* rc_cancel = nullptr;
-    const RECT* rc_event[7] = {};
+    DrawTabs(g, st, scale);
 
-    for (const auto& z : st.zones) {
-        switch (z.hit) {
-            case Hit::Opacity0: rc_op0 = &z.rc; break;
-            case Hit::Opacity1: rc_op1 = &z.rc; break;
-            case Hit::Opacity2: rc_op2 = &z.rc; break;
-            case Hit::Anchor0: rc_an0 = &z.rc; break;
-            case Hit::Anchor1: rc_an1 = &z.rc; break;
-            case Hit::Anchor2: rc_an2 = &z.rc; break;
-            case Hit::Glass: rc_glass = &z.rc; break;
-            case Hit::Fullscreen: rc_full = &z.rc; break;
-            case Hit::Secret: rc_secret = &z.rc; break;
-            case Hit::QuietOn: rc_qon = &z.rc; break;
-            case Hit::QuietFromDec: rc_qfd = &z.rc; break;
-            case Hit::QuietFromInc: rc_qfi = &z.rc; break;
-            case Hit::QuietToDec: rc_qtd = &z.rc; break;
-            case Hit::QuietToInc: rc_qti = &z.rc; break;
-            case Hit::OpenConfig: rc_open = &z.rc; break;
-            case Hit::Save: rc_save = &z.rc; break;
-            case Hit::Cancel: rc_cancel = &z.rc; break;
-            default: {
-                const int idx = EventIndex(z.hit);
-                if (idx >= 0) rc_event[idx] = &z.rc;
-                break;
-            }
-        }
+    // 内容区裁到视口内：滚动时上下都不能溢出到标题/按钮区。
+    const Gdiplus::GraphicsState clip = g.Save();
+    g.SetClip(Gdiplus::RectF(0.0f, static_cast<float>(st.view_top), w,
+                             static_cast<float>(st.view_h)));
+    switch (st.page) {
+        case 1: PaintBehavior(g, st, pad, scale); break;
+        case 2: PaintPerformance(g, st, pad, scale); break;
+        case 3: PaintPreset(g, st, pad, scale); break;
+        case 0:
+        default: PaintAppearance(g, st, pad, scale); break;
     }
+    g.Restore(clip);
 
-    auto to_f = [](const RECT& r) {
-        return Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
-                              static_cast<float>(r.right - r.left),
-                              static_cast<float>(r.bottom - r.top));
-    };
-
-    // ---- 外观（仅外观页：rc_op0 只在 page 0 生成，其余页不画这个标题）----
-    if (rc_op0 != nullptr) {
-        const float sy = static_cast<float>(rc_op0->top) - 24.0f * scale;
-        SectionTitle(g, L"外观", pad, sy, scale);
-    }
-    if (rc_op0 != nullptr) {
-        const int y = rc_op0->top;
-        RowText(g, Gdiplus::RectF(pad, static_cast<float>(y), content_w * 0.42f,
-                                  static_cast<float>(rc_op0->bottom - rc_op0->top)),
-                L"材质", L"液态玻璃最透，均衡最稳，不透明任何壁纸下都读得清", scale);
-        const RECT& r0 = *rc_op0;
-        const RECT& r2 = *rc_op2;
-        Gdiplus::RectF seg(static_cast<float>(r0.left), static_cast<float>(r0.top),
-                           static_cast<float>(r2.right - r0.left),
-                           static_cast<float>(r0.bottom - r0.top));
-        int hover_idx = -1;
-        if (st.hover == Hit::Opacity0) hover_idx = 0;
-        if (st.hover == Hit::Opacity1) hover_idx = 1;
-        if (st.hover == Hit::Opacity2) hover_idx = 2;
-        Segment(g, seg, 3, st.cfg.opacity, hover_idx, scale, SegIcon::Opacity);
-    }
-    if (rc_an0 != nullptr) {
-        const int y = rc_an0->top;
-        RowText(g, Gdiplus::RectF(pad, static_cast<float>(y), content_w * 0.42f,
-                                  static_cast<float>(rc_an0->bottom - rc_an0->top)),
-                L"位置", L"靠边时留 28px，永不越界", scale);
-        const RECT& r0 = *rc_an0;
-        const RECT& r2 = *rc_an2;
-        Gdiplus::RectF seg(static_cast<float>(r0.left), static_cast<float>(r0.top),
-                           static_cast<float>(r2.right - r0.left),
-                           static_cast<float>(r0.bottom - r0.top));
-        int hover_idx = -1;
-        if (st.hover == Hit::Anchor0) hover_idx = 0;
-        if (st.hover == Hit::Anchor1) hover_idx = 1;
-        if (st.hover == Hit::Anchor2) hover_idx = 2;
-        Segment(g, seg, 3, st.cfg.anchor, hover_idx, scale, SegIcon::Anchor);
-    }
-    if (rc_glass != nullptr) {
-        const int y = rc_glass->top;
-        RowText(g, Gdiplus::RectF(pad, static_cast<float>(y), content_w * 0.6f,
-                                  static_cast<float>(rc_glass->bottom - rc_glass->top)),
-                L"磨砂玻璃", L"透出背后的屏幕内容（仅「均衡」档生效）", scale);
-        Toggle(g, to_f(*rc_glass), st.cfg.glass, st.hover == Hit::Glass, scale);
-    }
-
-    // ---- 响应哪些操作（仅行为页：rc_event 只在 page 1 生成）----
-    {
-        const RECT* first = nullptr;
-        for (const RECT* r : rc_event) {
-            if (r != nullptr) { first = r; break; }
-        }
-        if (first != nullptr) {
-            SectionTitle(g, L"响应哪些操作", pad,
-                         static_cast<float>(first->top) - 24.0f * scale, scale);
-        }
-    }
-    static const wchar_t* kEventLabel[7] = {
-        L"媒体播放", L"消息通知", L"复制 / 截图", L"文件落盘", L"音量变化", L"电源 / 电量", L"设备接入"};
-    static const wchar_t* kEventSub[7] = {
-        L"歌名 / 进度", L"微信、邮件等", L"文本、图片、文件", L"下载完成",
-        L"调音量时", L"插拔、低电量", L"U 盘、移动硬盘"};
-    for (int i = 0; i < 7; ++i) {
-        if (rc_event[i] == nullptr) continue;
-        const RECT& r = *rc_event[i];
-        const bool on = (i == 0)   ? st.cfg.events.media
-                        : (i == 1) ? st.cfg.events.notification
-                        : (i == 2) ? st.cfg.events.clipboard
-                        : (i == 3) ? st.cfg.events.file
-                        : (i == 4) ? st.cfg.events.volume
-                        : (i == 5) ? st.cfg.events.power
-                                   : st.cfg.events.device;
-        const bool hover = st.hover == EventHit(i);
-        // 开关放在每个可点区域的右端：命中区比开关大（整行都能点），
-        // 这是设置界面该有的手感 —— 没人愿意去瞄一个 44×24 的小方块。
-        const float tw = 44.0f * scale;
-        const float th = 24.0f * scale;
-        const Gdiplus::RectF tr(static_cast<float>(r.right) - tw,
-                                static_cast<float>(r.top) + (static_cast<float>(r.bottom - r.top) -
-                                                             th) * 0.5f,
-                                tw, th);
-        const float text_w = static_cast<float>(r.right - r.left) - tw - 12.0f * scale;
-        RowText(g, Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top), text_w,
-                                  static_cast<float>(r.bottom - r.top)),
-                kEventLabel[i], kEventSub[i], scale);
-        Toggle(g, tr, on, hover, scale);
-    }
-
-    // ---- 其他（仅行为页：rc_full 只在 page 1 生成）----
-    if (rc_full != nullptr) {
-        const float sy = static_cast<float>(rc_full->top) - 24.0f * scale;
-        SectionTitle(g, L"其他", pad, sy, scale);
-    }
-    if (rc_full != nullptr) {
-        const int y = rc_full->top;
-        RowText(g, Gdiplus::RectF(pad, static_cast<float>(y), content_w * 0.66f,
-                                  static_cast<float>(rc_full->bottom - rc_full->top)),
-                L"全屏时收成一条", L"看视频 / 演示时让路，点一下叫醒", scale);
-        Toggle(g, to_f(*rc_full), st.cfg.fullscreen_hold, st.hover == Hit::Fullscreen, scale);
-    }
-    if (rc_secret != nullptr) {
-        const int y = rc_secret->top;
-        RowText(g, Gdiplus::RectF(pad, static_cast<float>(y), content_w * 0.66f,
-                                  static_cast<float>(rc_secret->bottom - rc_secret->top)),
-                L"隐藏疑似密码的复制内容", L"检测到密钥 / 密码时只显示「已复制」", scale);
-        Toggle(g, to_f(*rc_secret), st.cfg.clipboard.hide_secrets, st.hover == Hit::Secret,
-               scale);
-    }
-    if (rc_qon != nullptr) {
-        const int y = rc_qon->top;
-        RowText(g, Gdiplus::RectF(pad, static_cast<float>(y), content_w * 0.34f,
-                                  static_cast<float>(rc_qon->bottom - rc_qon->top)),
-                L"免打扰时段", L"这段时间内不产生任何提示", scale);
-        Toggle(g, to_f(*rc_qon), st.cfg.quiet.enabled, st.hover == Hit::QuietOn, scale);
-
-        const Gdiplus::Color dim = st.cfg.quiet.enabled
-                                       ? Rgba(255, color::kTextR, color::kTextG, color::kTextB)
-                                       : Rgba(110, 150, 152, 164);
-        const float clock_w = F(58, st.dpi);
-        auto stepper = [&](const RECT& minus, const RECT& plus, int minutes, Hit dh, Hit ih) {
-            const Gdiplus::RectF mr = to_f(minus);
-            FillRound(g, mr, mr.Height * 0.5f,
-                      Rgba(static_cast<BYTE>(st.hover == dh ? 70 : 38), 255, 255, 255));
-            Text(g, L"−", mr, 14.0f * scale, false, dim, Gdiplus::StringAlignmentCenter);
-            const Gdiplus::RectF pr = to_f(plus);
-            FillRound(g, pr, pr.Height * 0.5f,
-                      Rgba(static_cast<BYTE>(st.hover == ih ? 70 : 38), 255, 255, 255));
-            Text(g, L"+", pr, 14.0f * scale, false, dim, Gdiplus::StringAlignmentCenter);
-            // 时间显示在 − 与 + 之间那块空隙，也就是它自己 +/- 的中间。
-            Text(g, Widen(FormatClock(minutes)),
-                 Gdiplus::RectF(mr.GetRight() + 4.0f * scale, mr.Y, clock_w,
-                                mr.Height),
-                 12.0f * scale, true, dim, Gdiplus::StringAlignmentCenter);
+    // 上下渐隐：内容被裁切时直接切断，看起来像渲染坏了（半截文字卡在按钮上方）。
+    // 用和背景同一组渐变色收边，读起来才是「下面还有」而不是「画错了」。
+    if (st.max_scroll > 0 && st.view_h > 0) {
+        auto bg_at = [h](float y, BYTE* rgb) {
+            const float t = (h > 1.0f) ? (y / h) : 0.0f;
+            rgb[0] = static_cast<BYTE>(static_cast<float>(color::kBgTopR) +
+                                       static_cast<float>(color::kBgBotR - color::kBgTopR) * t);
+            rgb[1] = static_cast<BYTE>(static_cast<float>(color::kBgTopG) +
+                                       static_cast<float>(color::kBgBotG - color::kBgTopG) * t);
+            rgb[2] = static_cast<BYTE>(static_cast<float>(color::kBgTopB) +
+                                       static_cast<float>(color::kBgBotB - color::kBgTopB) * t);
         };
-        stepper(*rc_qfd, *rc_qfi, st.cfg.quiet.from_min, Hit::QuietFromDec, Hit::QuietFromInc);
-        stepper(*rc_qtd, *rc_qti, st.cfg.quiet.to_min, Hit::QuietToDec, Hit::QuietToInc);
-        const float mid = (static_cast<float>(rc_qfi->right) + static_cast<float>(rc_qtd->left)) *
-                          0.5f;
-        // 两段时间之间的「到」是分隔符，与开关状态无关（原先写成
-        // enabled ? L"到" : L"到"，两个分支相同，属于误留的三元）。
-        Text(g, L"到",
-             Gdiplus::RectF(mid - 12.0f * scale, static_cast<float>(rc_qfd->top), 24.0f * scale,
-                            static_cast<float>(rc_qfd->bottom - rc_qfd->top)),
-             10.0f * scale, false, Rgba(150, color::kSubR, color::kSubG, color::kSubB),
-             Gdiplus::StringAlignmentCenter);
+        const float fade = 42.0f * scale;
+        const float top = static_cast<float>(st.view_top);
+        const float bottom = top + static_cast<float>(st.view_h);
+        BYTE rgb[3];
+        if (st.scroll > 0) {
+            bg_at(top, rgb);
+            Gdiplus::LinearGradientBrush b(Gdiplus::PointF(0.0f, top),
+                                           Gdiplus::PointF(0.0f, top + fade),
+                                           Rgba(255, rgb[0], rgb[1], rgb[2]),
+                                           Rgba(0, rgb[0], rgb[1], rgb[2]));
+            g.FillRectangle(&b, 0.0f, top, w, fade);
+        }
+        if (st.scroll < st.max_scroll) {
+            bg_at(bottom, rgb);
+            Gdiplus::LinearGradientBrush b(Gdiplus::PointF(0.0f, bottom - fade),
+                                           Gdiplus::PointF(0.0f, bottom),
+                                           Rgba(0, rgb[0], rgb[1], rgb[2]),
+                                           Rgba(255, rgb[0], rgb[1], rgb[2]));
+            g.FillRectangle(&b, 0.0f, bottom - fade, w, fade);
+        }
     }
 
-    if (rc_open != nullptr) {
-        Button(g, to_f(*rc_open), L"打开配置文件（黑名单等高级项）", false,
-               st.hover == Hit::OpenConfig, scale);
+    // 细滚动条：只在真的放不下时出现，位置一眼能看出还剩多少。
+    if (st.max_scroll > 0 && st.view_h > 0) {
+        const float track_x = w - 7.0f * scale;
+        const float track_w = 3.0f * scale;
+        const float track_top = static_cast<float>(st.view_top);
+        const float track_h = static_cast<float>(st.view_h);
+        FillRound(g, Gdiplus::RectF(track_x, track_top, track_w, track_h), track_w * 0.5f,
+                  Rgba(26, 255, 255, 255));
+        const int content_h = st.view_h + st.max_scroll;
+        const float thumb_h =
+            (std::max)(24.0f * scale, track_h * static_cast<float>(st.view_h) /
+                                          static_cast<float>(content_h));
+        const float t = static_cast<float>(st.scroll) / static_cast<float>(st.max_scroll);
+        const float thumb_y = track_top + (track_h - thumb_h) * t;
+        FillRound(g, Gdiplus::RectF(track_x, thumb_y, track_w, thumb_h), track_w * 0.5f,
+                  Rgba(110, 255, 255, 255));
     }
 
-    // ---- 底部 ----
+    // ---- 底部：按钮与配置文件路径（四页共用，位置由布局给出）----
+    const RECT* rc_cancel = FindRect(st, Hit::Cancel);
+    const RECT* rc_save = FindRect(st, Hit::Save);
     if (rc_cancel != nullptr) {
-        Button(g, to_f(*rc_cancel), L"取消", false, st.hover == Hit::Cancel, scale);
+        Button(g, ToRectF(*rc_cancel), L"取消", false, st.hover == Hit::Cancel, scale);
     }
     if (rc_save != nullptr) {
-        Button(g, to_f(*rc_save), L"保存", true, st.hover == Hit::Save, scale);
+        Button(g, ToRectF(*rc_save), L"保存", true, st.hover == Hit::Save, scale);
     }
-    Text(g, st.path, Gdiplus::RectF(pad, h - 22.0f * scale, content_w, 16.0f * scale),
-         9.0f * scale, false, Rgba(120, color::kSubR, color::kSubG, color::kSubB));
+    Text(g, st.path, Gdiplus::RectF(pad, h - 20.0f * scale, content_w, 15.0f * scale),
+         9.0f * scale, false, Rgba(150, color::kSubR, color::kSubG, color::kSubB));
 }
 
 // ---------------------------------------------------------------- 交互
@@ -1030,6 +1416,96 @@ inline void NudgeQuiet(RuleConfig& cfg, Hit h) {
     }
 }
 
+// 一个控件被点中之后做什么。返回 true = 分页变了，需要重算布局并调窗口高度。
+//
+// 这里必须覆盖**每一个**生成了命中区的 Hit：命中区存在但分支不存在，
+// 用户看到的就是「点了没反应」——比没有这个控件更糟。
+inline bool HandleHit(State& st, Hit h) {
+    RuleConfig& c = st.cfg;
+    const int v = static_cast<int>(h);
+
+    // 分页 Tab（同组连续）
+    if (v >= static_cast<int>(Hit::TabAppearance) && v <= static_cast<int>(Hit::TabPreset)) {
+        const int next = v - static_cast<int>(Hit::TabAppearance);
+        if (next == st.page) return false;  // 重复点同一个 Tab 不该触发重排/改窗口尺寸
+        st.page = next;
+        return true;
+    }
+    // 预设卡（同组连续）与恢复出厂
+    if (v >= static_cast<int>(Hit::Preset0) && v <= static_cast<int>(Hit::Preset3)) {
+        ApplyPreset(c, v - static_cast<int>(Hit::Preset0));
+        return false;
+    }
+    if (h == Hit::PresetReset) {
+        ApplyPreset(c, -1);
+        return false;
+    }
+
+    // 一切「同组连续、结果就是下标」的分段控件都走这里，省得逐个写 case。
+    auto pick = [&](Hit base, int count, int* dst) {
+        const int b = static_cast<int>(base);
+        if (v >= b && v < b + count) {
+            *dst = v - b;
+            return true;
+        }
+        return false;
+    };
+    if (pick(Hit::Theme0, 3, &c.theme)) return false;
+    if (pick(Hit::QuietForm0, 3, &c.quiet_form)) return false;
+    if (pick(Hit::YieldKey0, 3, &c.yield_key)) return false;
+    if (pick(Hit::GlassQuality0, 4, &c.glass_quality)) return false;
+    // 目标屏幕决定「屏幕序号」这一行是否可用，选完要重排。
+    if (pick(Hit::TargetMonitor0, 3, &c.target_monitor)) return true;
+    {
+        const int b = static_cast<int>(Hit::Accent0);
+        if (v >= b && v < b + kAccentCount) {
+            c.accent = kAccents[v - b].hex;
+            return false;
+        }
+    }
+
+    switch (h) {
+        // ---- 外观页步进器 ----
+        case Hit::UiScaleDec: c.ui_scale = (std::max)(80, c.ui_scale - 5); return false;
+        case Hit::UiScaleInc: c.ui_scale = (std::min)(140, c.ui_scale + 5); return false;
+        case Hit::FontOffsetDec: c.font_offset = (std::max)(-2, c.font_offset - 1); return false;
+        case Hit::FontOffsetInc: c.font_offset = (std::min)(4, c.font_offset + 1); return false;
+        case Hit::CornerDec: c.corner_radius = StepCorner(c.corner_radius, -2); return false;
+        case Hit::CornerInc: c.corner_radius = StepCorner(c.corner_radius, 2); return false;
+        case Hit::TopOffsetDec: c.top_offset = (std::max)(4, c.top_offset - 2); return false;
+        case Hit::TopOffsetInc: c.top_offset = (std::min)(64, c.top_offset + 2); return false;
+        // ---- 行为页开关 ----
+        case Hit::AutoHideFocus: c.auto_hide_focus = !c.auto_hide_focus; return false;
+        case Hit::AutoHidePaused: c.auto_hide_paused = !c.auto_hide_paused; return false;
+        case Hit::AutoHideFullscreen:
+            c.auto_hide_fullscreen = !c.auto_hide_fullscreen;
+            return false;
+        case Hit::YieldEnabled: c.yield_enabled = !c.yield_enabled; return false;
+        case Hit::ReduceMotion: c.reduce_motion = !c.reduce_motion; return false;
+        case Hit::LowPowerDowngrade: c.low_power_downgrade = !c.low_power_downgrade; return false;
+        // ---- 性能页步进器 ----
+        case Hit::CaptureRefreshDec:
+            c.capture_refresh_ms = (std::max)(500, c.capture_refresh_ms - 500);
+            return false;
+        case Hit::CaptureRefreshInc:
+            c.capture_refresh_ms = (std::min)(8000, c.capture_refresh_ms + 500);
+            return false;
+        case Hit::MonitorIndexDec:
+            if (c.target_monitor != 2) return false;  // 未选「指定序号」时这一行不生效
+            c.monitor_index = (std::max)(0, c.monitor_index - 1);
+            return false;
+        case Hit::MonitorIndexInc:
+            if (c.target_monitor != 2) return false;
+            c.monitor_index = (std::min)(7, c.monitor_index + 1);
+            return false;
+        default: break;
+    }
+
+    // 剩下的就是原有的开关：玻璃 / 全屏收条 / 密码 / 免打扰 / 七个事件。
+    ApplyToggle(c, h);
+    return false;
+}
+
 inline void Invalidate(HWND hwnd) { ::InvalidateRect(hwnd, nullptr, FALSE); }
 
 inline LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -1057,20 +1533,34 @@ inline LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
         if (!st->shot_path.empty()) ::SetTimer(hwnd, 1, 600, nullptr);
 
         if (st->selftest) {
-            // 两件事一起验：
+            // 三件事一起验：
             // ① 命中表 —— 每个可点区域的中心必须命中它自己。这条能抓出
             //    「被拖动区盖住」「两块区域重叠」「矩形算反了」这类问题，
             //    而它们在人眼看来只是「这个开关点不动」。
-            // ② 配置往返 —— 越界值要被夹住，而不是把整块外观打回默认。
+            // ② 越界 —— 区域必须落在本页的真实高度内。v0.3.0 的「控件画不出来」
+            //    正是布局比窗口矮造成的，光看点击是发现不了的一半。
+            // ③ 配置往返 —— 越界值要被夹住，而不是把整块外观打回默认。
             int bad = 0;
             int checked = 0;
-            for (const auto& z : st->zones) {
-                if (z.hit == Hit::TitleBar) continue;  // 整块标题区，被更具体的区域压着
-                ++checked;
-                const int cx = (z.rc.left + z.rc.right) / 2;
-                const int cy = (z.rc.top + z.rc.bottom) / 2;
-                if (ZoneAt(*st, cx, cy) != z.hit) ++bad;
+            int outside = 0;
+            const int keep_page = st->page;
+            for (int page = 0; page < kPageCount; ++page) {
+                st->page = page;
+                std::vector<Zone> zones;
+                const int page_h = BuildZones(*st, zones);
+                st->zones = zones;
+                for (const auto& z : st->zones) {
+                    if (z.hit == Hit::TitleBar) continue;  // 整块标题区，被更具体的区域压着
+                    ++checked;
+                    const int cx = (z.rc.left + z.rc.right) / 2;
+                    const int cy = (z.rc.top + z.rc.bottom) / 2;
+                    if (ZoneAt(*st, cx, cy) != z.hit) ++bad;
+                    if (z.rc.right > st->width || z.rc.bottom > page_h) ++outside;
+                }
             }
+            st->page = keep_page;
+            BuildZones(*st, st->zones);
+
             st->cfg.opacity = 9;
             st->cfg.anchor = -3;
             const std::string json = st->cfg.ToJson();
@@ -1082,10 +1572,10 @@ inline LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             const bool clamp_ok = round.opacity == 2 && round.anchor == 0;
             char report[256];
             std::snprintf(report, sizeof(report),
-                          "zones=%d unclickable=%d clamp=opacity%d/anchor%d", checked, bad,
-                          round.opacity, round.anchor);
+                          "zones=%d unclickable=%d outside=%d clamp=opacity%d/anchor%d", checked,
+                          bad, outside, round.opacity, round.anchor);
             st->selftest_note = report;
-            st->saved = clamp_ok && bad == 0;
+            st->saved = clamp_ok && bad == 0 && outside == 0;
             ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
         }
         return 0;
@@ -1199,12 +1689,6 @@ inline LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
                     ::ShellExecuteW(nullptr, L"open", st->path.c_str(), nullptr, nullptr,
                                     SW_SHOWNORMAL);
                     return 0;
-                case Hit::Opacity0: st->cfg.opacity = 0; Invalidate(hwnd); return 0;
-                case Hit::Opacity1: st->cfg.opacity = 1; Invalidate(hwnd); return 0;
-                case Hit::Opacity2: st->cfg.opacity = 2; Invalidate(hwnd); return 0;
-                case Hit::Anchor0: st->cfg.anchor = 0; Invalidate(hwnd); return 0;
-                case Hit::Anchor1: st->cfg.anchor = 1; Invalidate(hwnd); return 0;
-                case Hit::Anchor2: st->cfg.anchor = 2; Invalidate(hwnd); return 0;
                 case Hit::QuietFromDec:
                 case Hit::QuietFromInc:
                 case Hit::QuietToDec:
@@ -1212,11 +1696,32 @@ inline LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
                     NudgeQuiet(st->cfg, h);
                     Invalidate(hwnd);
                     return 0;
-                default:
-                    ApplyToggle(st->cfg, h);
+                case Hit::None: return 0;
+                default: {
+                    // 其余（分页 / 预设 / 三档选择 / 步进器 / 开关）统一交给 HandleHit。
+                    // 旧版这里是 ApplyToggle 一把梭，导致新加的控件「点了没反应」。
+                    if (HandleHit(*st, h)) {
+                        Relayout(hwnd, *st);  // 换页：布局与窗口高度都要重算
+                    }
                     Invalidate(hwnd);
                     return 0;
+                }
             }
+        }
+
+        case WM_MOUSEWHEEL: {
+            if (st->max_scroll <= 0) return 0;
+            const int step = S(64, st->dpi);
+            const int before = st->scroll;
+            // 向上滚 delta 为正，内容要往下走（scroll 变小）。
+            st->scroll -= GET_WHEEL_DELTA_WPARAM(wparam) * step / WHEEL_DELTA;
+            if (st->scroll < 0) st->scroll = 0;
+            if (st->scroll > st->max_scroll) st->scroll = st->max_scroll;
+            if (st->scroll != before) {
+                BuildZones(*st, st->zones);  // 高度不变，只把内容按新偏移重排
+                Invalidate(hwnd);
+            }
+            return 0;
         }
 
         case WM_KEYDOWN:
@@ -1292,28 +1797,30 @@ inline bool ShowSettings(const RuleConfig& current, const std::wstring& path,
     state.dpi = dpi;
 
     const int client_w = settings_ui::S(settings_ui::layout::kWidth, dpi);
-    // 高度由布局算：先给一个足够大的值让 BuildZones 算完，再按它返回的下沿定窗口。
-    // 写死高度的版本每次加一行都得手改，而且改了会忘。
-    const int probe_h = settings_ui::S(900, dpi);  // 只用来占位，实际高度由布局算出
-    state.width = client_w;
-    state.height = probe_h;
-    std::vector<settings_ui::Zone> zones;
-    const int content_h = settings_ui::BuildZones(state, zones);
 
     MONITORINFO monitor{};
     monitor.cbSize = sizeof(monitor);
     ::GetMonitorInfoW(::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY), &monitor);
     const int work_w = monitor.rcWork.right - monitor.rcWork.left;
     const int work_h = monitor.rcWork.bottom - monitor.rcWork.top;
-    // 小屏兜底：面板比工作区还高时贴顶并让内容可滚 —— 这里不做滚动，
-    // 而是把高度夹住（设置项不多，夹住最多是底部按钮紧一点）。
-    const int final_h = content_h > work_h - 40 ? work_h - 40 : content_h;
-    state.height = final_h;  // 让 WM_CREATE 里的圆角区域按真实高度算
+
+    state.width = client_w;
+    state.max_height = work_h - settings_ui::S(40, dpi);  // 留出任务栏与呼吸空间
+
+    // 高度由布局算：先按内容自然高度求一遍，放不下才退到工作区高度并用滚动兜住。
+    // 写死高度的版本每次加一行都得手改，而且改了会忘。
+    state.height = 0;
+    std::vector<settings_ui::Zone> zones;
+    const int natural_h = settings_ui::BuildZones(state, zones);
+    const int final_h = (state.max_height > 0 && natural_h > state.max_height)
+                            ? state.max_height
+                            : natural_h;
+    state.height = final_h;
     const int x = monitor.rcWork.left + (work_w - client_w) / 2;
     const int y = monitor.rcWork.top + (work_h - final_h) / 2;
 
     HWND hwnd = ::CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_APPWINDOW, L"BI_SettingsWindow",
-                                  L"灵动岛设置", WS_POPUP, x, y, client_w, final_h, nullptr,
+                                  L"平衡岛设置", WS_POPUP, x, y, client_w, final_h, nullptr,
                                   nullptr, instance, &state);
     if (hwnd == nullptr) return false;
 

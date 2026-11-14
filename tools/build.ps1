@@ -102,6 +102,9 @@ $targets = @(
     @{ name = 'agent_tests';      src = 'tests/cpp/agent_tests.cpp';       libs = @() },
     @{ name = 'editor_tests';     src = 'tests/cpp/editor_tests.cpp';      libs = @() },
     @{ name = 'browser_tests';    src = 'tests/cpp/browser_tests.cpp';     libs = @() },
+    # 预设 / 步进器夹取 / 点击分派。预设会重置整份配置再回填，漏一个字段就会
+    # 悄悄丢掉用户的黑名单，所以这类断言必须存在。
+    @{ name = 'settings_tests';   src = 'tests/cpp/settings_tests.cpp';    libs = $guiLibs },
     @{ name = 'agent_probe';      src = 'probes/agent_probe.cpp';          libs = $guiLibs },
     @{ name = 'browser_probe';    src = 'probes/browser_probe.cpp';        libs = @('user32.lib', 'shell32.lib', 'ole32.lib') },
     @{ name = 'smtc_probe';       src = 'probes/smtc_probe.cpp';           libs = $guiLibs },
@@ -120,6 +123,9 @@ $targets = @(
     # 代码里读不出留白。已经靠它定位过两次（日历、通知/剪贴板/电量）。
     @{ name = 'layout_probe';     src = 'probes/layout_probe.cpp';         libs = $guiLibs },
     @{ name = 'hanzi_probe';      src = 'probes/hanzi_probe.cpp';          libs = $guiLibs },
+    # 设置面板四页离屏渲染 + 「有命中区却没画出来」逐像素检查。
+    # 存在的理由：v0.3.0 把控件加进布局表却忘了画，命中表全绿而屏幕一片空白。
+    @{ name = 'settings_probe';   src = 'probes/settings_probe.cpp';       libs = $guiLibs },
     @{ name = 'cache_probe';      src = 'probes/cache_probe.cpp';          libs = $guiLibs }
 )
 
@@ -170,7 +176,7 @@ if ($SkipTests) { Write-Host "已跳过测试（-SkipTests）"; exit 0 }
 
 Write-Step "running tests"
 $tests = @('contract_smoke', 'core_tests', 'rules_tests', 'render_tests',
-           'interaction_tests', 'agent_tests', 'editor_tests', 'browser_tests')
+           'interaction_tests', 'agent_tests', 'editor_tests', 'browser_tests', 'settings_tests')
 $bad = @()
 foreach ($name in $tests) {
     $exe = Join-Path $outDir "$name.exe"
