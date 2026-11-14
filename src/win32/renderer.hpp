@@ -313,6 +313,13 @@ struct CapsuleView {
 // 坐标为画布（客户区）物理像素；pill 是 Draw() 里算出的胶囊矩形。
 struct ExpandedHit {
     Gdiplus::RectF close;     // 右上角关闭
+    // 「收起」：展开态回到紧凑态。
+    //
+    // 为什么必须有这个键：展开态的上半截整块是「打开应用」的命中区（见下），
+    // 点它会把 App 拉到前台；进度条能拖、走带能点、× 会关掉活动 —— 于是
+    // 「点岛身收起」这条直觉路径几乎全被别的语义占满了。用户反馈的
+    // 「我该怎么从大岛点回小岛」就是找不到一个不承担别的语义的落点。
+    Gdiplus::RectF collapse;
     Gdiplus::RectF play;      // 封面 = 播放 / 暂停
     Gdiplus::RectF progress;  // 加高后的进度条命中带（可点可拖）
     Gdiplus::RectF app;       // 图标 + 标题这一块 = 打开对应的应用
@@ -332,6 +339,8 @@ inline ExpandedHit ExpandedHitAreas(const Gdiplus::RectF& pill, float scale) {
     const float btn = 26.0f * scale;
     ExpandedHit h;
     h.close = Gdiplus::RectF(pill.GetRight() - pad - btn, pill.Y + pad - 4.0f * scale, btn, btn);
+    // 收起键贴在 × 左侧 6px。两个都 26px，间距够手指区分，也不至于各占一块。
+    h.collapse = Gdiplus::RectF(h.close.X - 6.0f * scale - btn, h.close.Y, btn, btn);
     h.play = Gdiplus::RectF(pill.X + pad, pill.Y + pad, chip, chip);
     // 4px 的条太细，命中带上下各放 9px，鼠标不必精准落在像素上。
     h.progress = Gdiplus::RectF(pill.X + pad, bar_y - 9.0f * scale, pill.Width - pad * 2.0f,
@@ -352,9 +361,12 @@ inline ExpandedHit ExpandedHitAreas(const Gdiplus::RectF& pill, float scale) {
         h.tp_next = Gdiplus::RectF(row_x + (tb + tgap) * 4.0f, row_y, tb, tb);
     }
     // 「打开应用」的命中区：图标 + 标题 + 副标题（不含封面右下角的播放角标、
-    // 也不含进度条与关闭键）。用户点岛最直觉的动作就是「我要回到那个 App」，
-    // 所以给这一整块留了入口，而不是只让 42px 的图标可点。
-    h.app = Gdiplus::RectF(pill.X + pad, pill.Y + pad, pill.Width - pad * 2.0f - btn - 10.0f * scale,
+    // 不含进度条、也不含右上角那两个键）。用户点岛最直觉的动作就是「我要回到
+    // 那个 App」，所以给这一整块留了入口，而不是只让 42px 的图标可点。
+    // 右端现在要同时避开「收起」和「关闭」两个 26px 的键，否则点收起键时
+    // 这块也会命中（虽然分派顺序能救回来，但两个区域重叠本身就是隐患）。
+    h.app = Gdiplus::RectF(pill.X + pad, pill.Y + pad,
+                           pill.Width - pad * 2.0f - btn * 2.0f - 26.0f * scale,
                            std::max(chip, 52.0f * scale));
     return h;
 }
@@ -2049,7 +2061,7 @@ private:
         DrawBrowserChip(g, v, chip, chip_size, alpha);
 
         const float text_x = chip.GetRight() + 13.0f * scale;
-        const float text_w = (std::max)(20.0f, hit.close.X - 8.0f * scale - text_x);
+        const float text_w = (std::max)(20.0f, hit.collapse.X - 8.0f * scale - text_x);
 
         DrawText(g, Widen(v.browser_title),
                  Gdiplus::RectF(text_x, chip.Y - 1.0f * scale, text_w, 22.0f * scale), 15.0f * scale,
@@ -2114,6 +2126,8 @@ private:
                  Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.80f)), glassy ? 170 : 132,
                                 glassy ? 174 : 136, glassy ? 186 : 148));
 
+        // 浏览器版原来一个头部键都没有，等于没有任何可见的「退回小岛」入口。
+        DrawHeaderButtons(g, hit, alpha, scale);
     }
 
     // ---------------------------------------------------------------- 编辑器
@@ -2223,7 +2237,7 @@ private:
         DrawEditorChip(g, v, chip, chip_size, alpha);
 
         const float text_x = chip.GetRight() + 13.0f * scale;
-        const float text_w = (std::max)(20.0f, hit.close.X - 8.0f * scale - text_x);
+        const float text_w = (std::max)(20.0f, hit.collapse.X - 8.0f * scale - text_x);
 
         // 文件名后面跟一个「●」，和 VS Code 标题栏同一个语义。
         std::wstring title = Widen(v.editor_file);
@@ -2256,6 +2270,9 @@ private:
                  10.0f * scale, Gdiplus::FontStyleRegular,
                  Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.80f)), glassy ? 170 : 132,
                                 glassy ? 174 : 136, glassy ? 186 : 148));
+
+        // 编辑器版同理：没有头部键就没有退回入口。
+        DrawHeaderButtons(g, hit, alpha, scale);
     }
 
     // 休眠条：**有岛但被藏起来**时的那一条把手。
@@ -2293,7 +2310,7 @@ private:
         DrawStateDot(g, chip, alpha, scale, v.agent_state, v.wave_phase);
 
         const float text_x = chip.GetRight() + 14.0f * scale;
-        const float text_w = std::max(20.0f, hit.close.X - 8.0f * scale - text_x);
+        const float text_w = std::max(20.0f, hit.collapse.X - 8.0f * scale - text_x);
 
         // ---- 身份：品牌 + 项目 + 时长 ----
         DrawText(g, Widen(v.agent_name.empty() ? v.title : v.agent_name),
@@ -2318,7 +2335,7 @@ private:
                                          Gdiplus::FontStyleBold) +
                              18.0f * scale;
             const float bh = 18.0f * scale;
-            const Gdiplus::RectF badge(hit.close.X - 6.0f * scale - bw, pill.Y + pad - 1.0f * scale, bw,
+            const Gdiplus::RectF badge(hit.collapse.X - 6.0f * scale - bw, pill.Y + pad - 1.0f * scale, bw,
                                        bh);
             const Gdiplus::Color c = StateColor(v.agent_state);
             FillRounded(g, badge, bh * 0.5f,
@@ -2447,11 +2464,30 @@ private:
                                 glassy ? 158 : 108, glassy ? 160 : 109, glassy ? 170 : 118));
 
 
-        // ---- 右上角关闭 ----
-        FillRounded(g, hit.close, hit.close.Height * 0.5f,
-                    Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.14f)), 255, 255, 255));
-        DrawText(g, L"×", hit.close, 16.0f * scale, Gdiplus::FontStyleRegular,
-                 Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.92f)), 244, 244, 249),
+        // ---- 右上角：收起 + 关闭 ----
+        DrawHeaderButtons(g, hit, alpha, scale);
+    }
+
+    // 头部右上角两个键：收起（⌄）与关闭（×）。
+    // 画在一起是因为它们必须永远成对出现 —— 只有一个 × 的时候，用户没有
+    // 「退回去」的落点，只能去猜岛身哪里能点（实测就是这么被问住的）。
+    void DrawHeaderButtons(Gdiplus::Graphics& g, const ExpandedHit& hit, BYTE alpha, float scale) {
+        const Gdiplus::Color plate(Clamp8(static_cast<int>(alpha * 0.14f)), 255, 255, 255);
+        const Gdiplus::Color ink(Clamp8(static_cast<int>(alpha * 0.92f)), 244, 244, 249);
+        FillRounded(g, hit.collapse, hit.collapse.Height * 0.5f, plate);
+        {
+            Gdiplus::Pen pen(ink, 1.8f * scale);
+            pen.SetStartCap(Gdiplus::LineCapRound);
+            pen.SetEndCap(Gdiplus::LineCapRound);
+            const float cx = hit.collapse.X + hit.collapse.Width * 0.5f;
+            const float cy = hit.collapse.Y + hit.collapse.Height * 0.5f;
+            const float w = 4.6f * scale;
+            const float h = 2.8f * scale;
+            g.DrawLine(&pen, cx - w, cy - h, cx, cy + h);
+            g.DrawLine(&pen, cx, cy + h, cx + w, cy - h);
+        }
+        FillRounded(g, hit.close, hit.close.Height * 0.5f, plate);
+        DrawText(g, L"×", hit.close, 16.0f * scale, Gdiplus::FontStyleRegular, ink,
                  Gdiplus::StringAlignmentCenter);
     }
 
@@ -2477,7 +2513,7 @@ private:
 
         const float text_x = chip.GetRight() + 14.0f * scale;
         // 右上角关闭按钮会占掉一块，标题必须在此之前收尾，否则长歌名会压到 × 上。
-        const float text_w = std::max(20.0f, hit.close.X - 8.0f * scale - text_x);
+        const float text_w = std::max(20.0f, hit.collapse.X - 8.0f * scale - text_x);
 
         // 标题与副标题的相对位置锁定在图标上：图标顶对齐标题，图标底对齐副标题，
         // 这样即使只有一行副标题，三者也是一个视觉块，而不是三行各自浮着。
@@ -2610,12 +2646,8 @@ private:
                  Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.98f)),
                                 glassy ? 158 : 108, glassy ? 160 : 109, glassy ? 170 : 118));
 
-        // ---- 右上角关闭按钮（点它 dismiss 当前活动）----
-        FillRounded(g, hit.close, hit.close.Height * 0.5f,
-                    Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.14f)), 255, 255, 255));
-        DrawText(g, L"×", hit.close, 16.0f * scale, Gdiplus::FontStyleRegular,
-                 Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.92f)), 244, 244, 249),
-                 Gdiplus::StringAlignmentCenter);
+        // ---- 右上角：收起（回到小岛）+ 关闭（dismiss 当前活动）----
+        DrawHeaderButtons(g, hit, alpha, scale);
 
         // ---- 封面右下角的播放 / 暂停角标（点封面切换）----
         if (v.kind.rfind("media", 0) == 0) {

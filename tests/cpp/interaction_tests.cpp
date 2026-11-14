@@ -119,6 +119,29 @@ void TestHitGeometry() {
     const auto h1 = ExpandedHitAreas(Gdiplus::RectF(16.0f, 16.0f, 420.0f, 196.0f), 1.0f);
     CHECK(h1.close.X > 300.0f);
     CHECK(h1.progress.Width == 420.0f - 36.0f);
+
+    // ---- 收起键 ----
+    // 它必须和 × 一样大、同一行、在它左边且不重叠 —— 三个条件缺一个就会
+    // 出现「两个键叠在一起，点哪个看运气」。
+    CHECK(h.collapse.Width == h.close.Width);
+    CHECK(h.collapse.Height == h.close.Height);
+    CHECK(h.collapse.Y == h.close.Y);
+    CHECK(h.collapse.GetRight() < h.close.X);
+    CHECK(h.collapse.GetRight() > h.close.X - 10.0f * scale);  // 紧邻，不散开
+    CHECK(h.collapse.X > pill.X + pill.Width * 0.5f);
+    // 收起键不能被 × 或「打开应用」盖住：三个区域两两不重叠。
+    CHECK(!h.collapse.IntersectsWith(h.close));
+    CHECK(!h.app.IntersectsWith(h.collapse));
+    CHECK(!h.app.IntersectsWith(h.close));
+    // 点开岛身仍要能打开应用：标题那一块不能被两个键吃掉。
+    CHECK(h.app.Width > pill.Width * 0.5f);
+    // 两个键都得在胶囊里，否则会被窗口裁掉一半（点了没反应）。
+    CHECK(h.collapse.X >= pill.X);
+    CHECK(h.collapse.GetBottom() <= pill.GetBottom());
+
+    const auto h2 = ExpandedHitAreas(Gdiplus::RectF(16.0f, 16.0f, 420.0f, 196.0f), 2.0f);
+    CHECK(h2.collapse.GetRight() < h2.close.X);
+    CHECK(!h2.app.IntersectsWith(h2.collapse));
 }
 
 int main() {

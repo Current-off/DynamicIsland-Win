@@ -127,6 +127,10 @@ inline double ProgressAtX(const BoxD& bar, int x) {
 }
 struct HitState {
     BoxD close, play, progress, app;
+    // 「收起」：展开态回到紧凑态。它和 close 是两件事 —— close 会把当前活动
+    // dismiss 掉（以后不再提示），收起只是把大岛变回小岛。混成一个键的后果是
+    // 用户想收起来却把通知永久关掉了。
+    BoxD collapse;
     // 走带控件（媒体展开态那一排）
     BoxD tp_prev, tp_back, tp_play, tp_fwd, tp_next;
     // 主胶囊右侧的每个小圆。以前没有这一项，点小圆会被当成「点了胶囊」，
@@ -148,6 +152,15 @@ int g_seek_step_req = 0;
 // ±1 = 上一首 / 下一首
 int g_skip_req = 0;
 bool g_close_req = false;
+// 「收起」请求：点收起键 / 鼠标离开大岛后自动收起。
+bool g_collapse_req = false;
+// 鼠标是否还在窗口上。WM_MOUSELEAVE 只在第一次离开时报一次，所以需要自己记状态，
+// 并在 MOUSEMOVE 时重新武装 TrackMouseEvent。
+bool g_pointer_inside = true;
+std::uint64_t g_left_at_ms = 0;  // 指针离开窗口的时刻（0 = 一直在里面）
+// 离开多久之后自动收起。1.5s：短到不会让人等，长到容得下「顺手把鼠标
+// 移到走带按钮」时那十几像素的越界抖动 —— 更短的话点下一首会误收。
+constexpr std::int64_t kCollapseAfterLeaveMs = 1500;
 POINT g_press_pt = {-1, -1};
 bool g_press_in_button = false;
 
@@ -238,7 +251,7 @@ struct Options {
     long long display_at_ms = -1;    // 到点模拟一次 WM_DISPLAYCHANGE
     std::string overview_launch;     // 覆盖一览项的拉起目标，验证 LaunchApp 全链路
     long long mouse_at_ms = -1;      // 到点模拟一次真实鼠标序列（展开态按钮 / 拖进度）
-    std::string mouse_target;        // close | play | progress
+    std::string mouse_target;        // close | collapse | play | progress | app | dbl | tap
     double mouse_progress = 0.42;   // progress 拖到哪个位置
     std::string lyric_lrc_path;      // 本地 LRC fixture：确定性歌词回归
     long long lyric_pos_ms = -1;     // fixture 模式下注入播放位置（<0 = 用运行时钟）
@@ -399,18 +412,34 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
                     g_dragging = true;
                     g_drag_progress = ProgressAtX(g_hit.progress, pt.x);
                     ::SetCapture(hwnd);
-                } else if (g_hit.close.Contains(pt.x, pt.y) || g_hit.play.Contains(pt.x, pt.y) ||
-                           g_hit.app.Contains(pt.x, pt.y)) {
+                } else if (g_hit.close.Contains(pt.x, pt.y) || g_hit.collapse.Contains(pt.x, pt.y) ||
+                           g_hit.play.Contains(pt.x, pt.y) || g_hit.app.Contains(pt.x, pt.y)) {
                     g_press_in_button = true;
                 }
             }
             return 0;
         }
         case WM_MOUSEMOVE:
+            if (!g_pointer_inside) {
+                g_pointer_inside = true;
+                g_left_at_ms = 0;
+            }
+            // WM_MOUSELEAVE 是一次性的：每次移动都要重新挂上，否则只会收到第一次。
+            {
+                TRACKMOUSEEVENT tme{};
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                ::TrackMouseEvent(&tme);
+            }
             if (g_dragging) {
                 const POINT pt = {static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
                 g_drag_progress = ProgressAtX(g_hit.progress, pt.x);
             }
+            return 0;
+        case WM_MOUSELEAVE:
+            g_pointer_inside = false;
+            g_left_at_ms = ::GetTickCount64();
             return 0;
         case WM_LBUTTONUP: {
             // 客户区坐标必须在这里取：主循环消费 g_click 时窗口可能已被
@@ -428,6 +457,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             }
             if (g_hit.expanded && g_press_in_button) {
                 if (g_hit.close.Contains(pt.x, pt.y)) g_close_req = true;
+                else if (g_hit.collapse.Contains(pt.x, pt.y)) g_collapse_req = true;
                 else if (g_hit.play.Contains(pt.x, pt.y)) g_play_req = true;
                 else if (g_hit.tp_play.Contains(pt.x, pt.y)) g_play_req = true;
                 else if (g_hit.tp_back.Contains(pt.x, pt.y)) g_seek_step_req = -1;
@@ -2715,6 +2745,37 @@ int Run() {
             demo.overview = false;
         }
 
+        // 收起：只把大岛变回小岛。**不是**关闭 —— 不清 dismissed、不结束活动，
+        // 下次有内容它还会正常出现。这两件事以前只有「×」一个入口，等于逼用户
+        // 用「永久关掉这条提示」来表达「我想收起来」。
+        if (g_collapse_req) {
+            g_collapse_req = false;
+            last_interaction_ms = now_ms;
+            if (!demo.expand_id.empty() || demo.overview) {
+                demo.expand_id.clear();
+                demo.overview = false;
+                note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] collapse (button)");
+            }
+        }
+
+        // 鼠标离开大岛 1.5 秒后自动收起。
+        //
+        // 为什么必须有：展开态的岛身上半截整块是「打开应用」的命中区，进度条
+        // 能拖、走带能点、× 会永久 dismiss —— 「点岛身收起」这条最直觉的路径
+        // 被别的语义占满了，于是用户只能问「我该怎么点回小岛」。
+        // 拖进度条时绝不收：鼠标移出窗口是拖动到一半的正常现象。
+        if (!demo.expand_id.empty() && !g_pointer_inside && !g_dragging && g_left_at_ms != 0 &&
+            // 这里必须用 GetTickCount64 而不是循环里的 now_ms：后者是「相对循环起点」
+            // 的毫秒数，和 MOUSELEAVE 记下的绝对时刻相减是个巨大的负数 ——
+            // 第一版就是这么写的，结果自动收起永远不触发（日志里只有 armed）。
+            ::GetTickCount64() - g_left_at_ms >=
+                static_cast<std::uint64_t>(kCollapseAfterLeaveMs)) {
+            demo.expand_id.clear();
+            g_left_at_ms = 0;
+            note("[t=+" + std::to_string(elapsed).substr(0, 5) +
+                 "s] collapse (pointer left " + std::to_string(kCollapseAfterLeaveMs) + "ms)");
+        }
+
         // 自动展开：与「左键点一下」走同一条路径（设置 expand_id），不绕过状态机。
         // 一次性触发：否则关掉活动后 expand_id 变空，它会立刻又把新活动展开，
         // 回归日志里全是「auto expand」，反而盖掉真正要看的东西。
@@ -2790,10 +2851,19 @@ int Run() {
             auto center = [](const BoxD& b) {
                 return POINT{static_cast<LONG>(b.x + b.w * 0.5), static_cast<LONG>(b.y + b.h * 0.5)};
             };
+            if (opt.mouse_target == "leave") {
+                // 只投递 WM_MOUSELEAVE：验证「鼠标移开后自动收起」这条路径。
+                // 真实鼠标没法自动化，而这条消息是它唯一的触发条件。
+                ::PostMessageW(hwnd, WM_MOUSELEAVE, 0, 0);
+                note("[t=+" + std::to_string(elapsed).substr(0, 5) +
+                     "s] inject mouse=leave (auto-collapse armed)");
+            } else {
             POINT down = center(g_hit.progress);
             POINT up = down;
             if (opt.mouse_target == "close") {
                 down = up = center(g_hit.close);
+            } else if (opt.mouse_target == "collapse") {
+                down = up = center(g_hit.collapse);
             } else if (opt.mouse_target == "play") {
                 down = up = center(g_hit.play);
             } else if (opt.mouse_target == "app") {
@@ -2823,6 +2893,7 @@ int Run() {
                  opt.mouse_target + " (" + std::to_string(down.x) + "," +
                  std::to_string(down.y) + ") -> (" + std::to_string(up.x) + "," +
                  std::to_string(up.y) + ")");
+            }
         }
 
         // 第二次启动：让已有实例亮一下，顺便告诉用户怎么退出。
@@ -3127,6 +3198,7 @@ int Run() {
                                           static_cast<float>(drawn.content_h * scale));
                 const auto areas = bi::win32::ExpandedHitAreas(pill, static_cast<float>(scale));
                 g_hit.close = ToBox(areas.close);
+                g_hit.collapse = ToBox(areas.collapse);
                 g_hit.play = ToBox(areas.play);
                 g_hit.tp_back = ToBox(areas.tp_back);
                 g_hit.tp_play = ToBox(areas.tp_play);
@@ -3376,7 +3448,15 @@ int Run() {
             perf_window_ms = now_ms;
         }
         if (used < frame_budget) {
-            ::Sleep(static_cast<DWORD>((frame_budget - used) * 1000.0));
+            // 不能在这里用 Sleep：帧预算 20fps 档是 50ms、休眠条档是 100ms，
+            // 而 Sleep 期间到达的点击要睡满才被下一轮 PeekMessage 拿到 ——
+            // 这就是「点了没反应，过一下才动」的来源（不是动画慢，是输入在排队）。
+            // 换成可被输入唤醒的等待：有消息立刻返回，没消息才睡到帧边界。
+            const DWORD wait_ms = static_cast<DWORD>((frame_budget - used) * 1000.0);
+            if (wait_ms > 0) {
+                ::MsgWaitForMultipleObjectsEx(0, nullptr, wait_ms, QS_ALLINPUT,
+                                              MWMO_INPUTAVAILABLE);
+            }
         }
     }
 
