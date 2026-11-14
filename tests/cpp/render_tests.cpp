@@ -26,37 +26,37 @@ void Check(bool cond, const char* expr, int line) {
 #define CHECK(expr) Check((expr), #expr, __LINE__)
 
 void TestParseProgress() {
-    CHECK(diw::win32::ParseProgress(R"({"progress":0.62})") == 0.62);
-    CHECK(diw::win32::ParseProgress(R"({"a":1,"progress":0.5,"b":2})") == 0.5);
-    CHECK(diw::win32::ParseProgress(R"({"progress": 1})") == 1.0);
-    CHECK(diw::win32::ParseProgress(R"({"progress": 0})") == 0.0);
+    CHECK(bi::win32::ParseProgress(R"({"progress":0.62})") == 0.62);
+    CHECK(bi::win32::ParseProgress(R"({"a":1,"progress":0.5,"b":2})") == 0.5);
+    CHECK(bi::win32::ParseProgress(R"({"progress": 1})") == 1.0);
+    CHECK(bi::win32::ParseProgress(R"({"progress": 0})") == 0.0);
     // 缺失、越界、非数字、空串都必须回落到 fallback，不能让渲染层拿到脏值。
-    CHECK(diw::win32::ParseProgress(R"({"other":1})") == -1.0);
-    CHECK(diw::win32::ParseProgress(R"({"progress":1.5})") == -1.0);
-    CHECK(diw::win32::ParseProgress(R"({"progress":-0.2})") == -1.0);
-    CHECK(diw::win32::ParseProgress(R"({"progress":"high"})") == -1.0);
-    CHECK(diw::win32::ParseProgress("") == -1.0);
-    CHECK(diw::win32::ParseProgress(R"({"progress":abc})", 0.25) == 0.25);
+    CHECK(bi::win32::ParseProgress(R"({"other":1})") == -1.0);
+    CHECK(bi::win32::ParseProgress(R"({"progress":1.5})") == -1.0);
+    CHECK(bi::win32::ParseProgress(R"({"progress":-0.2})") == -1.0);
+    CHECK(bi::win32::ParseProgress(R"({"progress":"high"})") == -1.0);
+    CHECK(bi::win32::ParseProgress("") == -1.0);
+    CHECK(bi::win32::ParseProgress(R"({"progress":abc})", 0.25) == 0.25);
 }
 
 // 渲染层布局常量必须落在核心域声明的合法区间内，否则展开态会被设计约束悄悄破坏。
 void TestLayoutContract() {
-    CHECK(diw::IsValidExpandedHeight(diw::win32::Layout::kExpandedH));
-    CHECK(diw::win32::Layout::kExpandedW > diw::win32::Layout::kCompactW);
-    CHECK(diw::win32::Layout::kCompactH > 0.0f);
-    CHECK(diw::win32::Layout::kDetachedSize > 0.0f);
-    CHECK(diw::win32::Layout::kMargin * 2.0f < diw::win32::Layout::kCompactW);
+    CHECK(bi::IsValidExpandedHeight(bi::win32::Layout::kExpandedH));
+    CHECK(bi::win32::Layout::kExpandedW > bi::win32::Layout::kCompactW);
+    CHECK(bi::win32::Layout::kCompactH > 0.0f);
+    CHECK(bi::win32::Layout::kDetachedSize > 0.0f);
+    CHECK(bi::win32::Layout::kMargin * 2.0f < bi::win32::Layout::kCompactW);
     // 分离小胶囊的高度不能超过主胶囊，否则视觉上会「比主位还重」。
-    CHECK(diw::win32::Layout::kDetachedSize <= diw::win32::Layout::kCompactH);
+    CHECK(bi::win32::Layout::kDetachedSize <= bi::win32::Layout::kCompactH);
 }
 
 void TestWiden() {
-    CHECK(diw::win32::Widen("").empty());
-    CHECK(diw::win32::Widen("abc") == L"abc");
+    CHECK(bi::win32::Widen("").empty());
+    CHECK(bi::win32::Widen("abc") == L"abc");
     // 中文必须能无损往返，否则标题会渲染成方块。
-    const std::wstring zh = diw::win32::Widen("产品站会");
+    const std::wstring zh = bi::win32::Widen("产品站会");
     CHECK(zh.size() == 4);
-    CHECK(diw::win32::Widen("晴天") == L"晴天");
+    CHECK(bi::win32::Widen("晴天") == L"晴天");
 }
 
 }  // namespace
@@ -72,7 +72,7 @@ void TestWiden() {
 //   换背景 → 玻璃输出跟着变；不透明输出纹丝不动。
 //   白底与黑底 → 玻璃输出差一大截，但白底仍然被压暗（60% 染色）。
 void TestGlassBody() {
-    using namespace diw::win32;
+    using namespace bi::win32;
     // 本用例需要真实 GDI+ 合成：就地初始化，不起来整个窗口栈。
     Gdiplus::GdiplusStartupInput gdi_input;
     ULONG_PTR gdi_token = 0;
@@ -203,7 +203,7 @@ std::vector<std::uint8_t> BytesOf(Gdiplus::Bitmap& bmp) {
 // 裁剪关系或质量档位被改动，画面就会出现"底对了、字错位"这类只在某几种布局下
 // 才露头的偏差，而这种偏差人眼在深色胶囊上极难发现。这里用逐字节比较兜住它。
 void TestPhaseSplit() {
-    using namespace diw::win32;
+    using namespace bi::win32;
     Gdiplus::GdiplusStartupInput gdi_input;
     ULONG_PTR gdi_token = 0;
     if (Gdiplus::GdiplusStartup(&gdi_token, &gdi_input, nullptr) != Gdiplus::Ok) {

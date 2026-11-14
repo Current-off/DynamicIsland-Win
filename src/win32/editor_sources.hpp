@@ -16,7 +16,7 @@
 
 #include "../core/editor_state.hpp"
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 inline std::wstring EditorWiden(const std::string& s) {
@@ -165,4 +165,4 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi

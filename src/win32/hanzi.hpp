@@ -6,8 +6,8 @@
 //
 // LCMapStringEx 的 LCMAP_SIMPLIFIED_CHINESE 依赖系统装有中文 locale：
 // 调用失败时原样返回（宁可显示繁体，也不能把歌词变成乱码）。
-#ifndef DIW_SRC_WIN32_HANZI_HPP
-#define DIW_SRC_WIN32_HANZI_HPP
+#ifndef BI_SRC_WIN32_HANZI_HPP
+#define BI_SRC_WIN32_HANZI_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -20,7 +20,7 @@
 
 #include <string>
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 inline std::string WideToUtf8(const std::wstring& w) {
@@ -89,6 +89,6 @@ inline std::string ToSimplified(const std::string& utf8) {
 }
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_HANZI_HPP
+#endif  // BI_SRC_WIN32_HANZI_HPP

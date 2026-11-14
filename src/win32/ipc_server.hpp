@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 命名管道服务端（C++17 + Win32）
+// balance_island / 命名管道服务端（C++17 + Win32）
 //
 // 让**任何程序**都能往岛上推一条活动：CI 跑完、下载器完成、脚本跑完、IDE 编译
 // 结束 —— 这些信息本来就该出现在胶囊上，而不是各自弹一个右下角通知。
@@ -13,8 +13,8 @@
 //    ACCESS_DENIED 而不是劫持。这满足协议文档里"per-user"的语义，
 //    也省掉一堆 SID 拼接代码。
 // 4. 上限全在解码器里（core/ipc_protocol.hpp），这一层只负责"别读爆内存"。
-#ifndef DIW_SRC_WIN32_IPC_SERVER_HPP
-#define DIW_SRC_WIN32_IPC_SERVER_HPP
+#ifndef BI_SRC_WIN32_IPC_SERVER_HPP
+#define BI_SRC_WIN32_IPC_SERVER_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -34,12 +34,12 @@
 
 #include "../core/ipc_protocol.hpp"
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 class IpcServer {
 public:
-    static constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\DynamicIslandWin-v1";
+    static constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\BalanceIsland-v1";
     // 未消费请求的上限。见 HandleOne 里的注释：这是防止本机进程 Flood 的一道闸。
     static constexpr std::size_t kMaxQueued = 256;
 
@@ -229,6 +229,6 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_IPC_SERVER_HPP
+#endif  // BI_SRC_WIN32_IPC_SERVER_HPP

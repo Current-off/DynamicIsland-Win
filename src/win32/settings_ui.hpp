@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 设置面板（全自绘，与胶囊本体同一套视觉语言）
+// balance_island / 设置面板（全自绘，与胶囊本体同一套视觉语言）
 //
 // 为什么从「原生控件 + 系统灰底」改成全自绘：
 //   原来的设置窗口是一个灰色对话框上堆 groupbox 和系统复选框，和顶上那颗
@@ -18,8 +18,8 @@
 //   - 点开关/分段立即生效于本地副本，点「保存」才写盘；运行中的实例 1 秒内热加载。
 //   - Esc = 取消，Enter = 保存，点右上 × = 取消。
 //   - 标题栏区域可拖动（无边框窗口必须自己实现）。
-#ifndef DIW_SRC_WIN32_SETTINGS_UI_HPP
-#define DIW_SRC_WIN32_SETTINGS_UI_HPP
+#ifndef BI_SRC_WIN32_SETTINGS_UI_HPP
+#define BI_SRC_WIN32_SETTINGS_UI_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -42,7 +42,7 @@
 #include "renderer.hpp"
 #include "rules.hpp"
 
-namespace diw {
+namespace bi {
 namespace win32 {
 namespace settings_ui {
 
@@ -480,7 +480,7 @@ inline void Paint(State& st, HDC dc, int width, int height) {
     const float content_w = w - pad * 2.0f;
 
     // ---- 标题 ----
-    Text(g, L"灵动岛", Gdiplus::RectF(pad, F(18, st.dpi), content_w, F(28, st.dpi)),
+    Text(g, L"平衡岛", Gdiplus::RectF(pad, F(18, st.dpi), content_w, F(28, st.dpi)),
          17.0f * scale, true, Rgba(255, color::kTextR, color::kTextG, color::kTextB));
     Text(g, L"外观与响应设置 · 保存后立即生效", Gdiplus::RectF(pad, F(48, st.dpi), content_w,
                                                               F(18, st.dpi)),
@@ -804,8 +804,8 @@ inline LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
             st->cfg.opacity = 9;
             st->cfg.anchor = -3;
             const std::string json = st->cfg.ToJson();
-            diw::json::Value root;
-            diw::json::Parse(json, root, nullptr);
+            bi::json::Value root;
+            bi::json::Parse(json, root, nullptr);
             const RuleConfig round = RuleConfig::FromJson(root);
             st->cfg.opacity = round.opacity;
             st->cfg.anchor = round.anchor;
@@ -1006,7 +1006,7 @@ inline bool ShowSettings(const RuleConfig& current, const std::wstring& path,
         wc.hInstance = instance;
         wc.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = nullptr;  // 全自绘：给一个画刷反而会闪
-        wc.lpszClassName = L"DIW_SettingsWindow";
+        wc.lpszClassName = L"BI_SettingsWindow";
         if (::RegisterClassExW(&wc) == 0) return false;
         registered = true;
     }
@@ -1042,7 +1042,7 @@ inline bool ShowSettings(const RuleConfig& current, const std::wstring& path,
     const int x = monitor.rcWork.left + (work_w - client_w) / 2;
     const int y = monitor.rcWork.top + (work_h - final_h) / 2;
 
-    HWND hwnd = ::CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_APPWINDOW, L"DIW_SettingsWindow",
+    HWND hwnd = ::CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_APPWINDOW, L"BI_SettingsWindow",
                                   L"灵动岛设置", WS_POPUP, x, y, client_w, final_h, nullptr,
                                   nullptr, instance, &state);
     if (hwnd == nullptr) return false;
@@ -1066,6 +1066,6 @@ inline bool ShowSettings(const RuleConfig& current, const std::wstring& path,
 }
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_SETTINGS_UI_HPP
+#endif  // BI_SRC_WIN32_SETTINGS_UI_HPP

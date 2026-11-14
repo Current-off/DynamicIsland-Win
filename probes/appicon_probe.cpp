@@ -33,9 +33,9 @@
 
 #include "../../src/win32/live_sources.hpp"
 
-using diw::live::CollectShortcutFiles;
-using diw::live::SaveIconPng;
-using diw::live::WidenOf;
+using bi::live::CollectShortcutFiles;
+using bi::live::SaveIconPng;
+using bi::live::WidenOf;
 
 // 诊断：枚举 shell:AppsFolder，打印 AUMID 含 filter 的项。
 // 用来确认「UWP 应用到底在不在这个虚拟文件夹里、AppID 长什么样」。
@@ -194,12 +194,12 @@ int main(int argc, char** argv) {
 
     // 最后用产品函数本身跑一遍（隐式 AUMID 解码 + .lnk 扫描 + 缓存），
     // 确认产品路径与探针路径行为一致。
-    const std::string icon = diw::live::AppIconForAumid(aumid);
+    const std::string icon = bi::live::AppIconForAumid(aumid);
     std::printf("AppIconForAumid: %s\n", icon.empty() ? "(empty)" : icon.c_str());
 
     // 打包应用形态对照（通知中心给 PFN，.lnk 存 PFN!App）
     const std::string wb = "WorkBuddy.WorkBuddy";
-    const std::string icon2 = diw::live::AppIconForAumid(wb);
+    const std::string icon2 = bi::live::AppIconForAumid(wb);
     std::printf("AppIconForAumid(%s): %s\n", wb.c_str(), icon2.empty() ? "(empty)" : icon2.c_str());
 
     if (co_ok) ::CoUninitialize();

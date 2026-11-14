@@ -24,7 +24,7 @@
 
 #include "../core/browser_page.hpp"  // 复用 Lower / EndsWith 这类小工具
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 struct MeetingBrand {
@@ -283,4 +283,4 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi

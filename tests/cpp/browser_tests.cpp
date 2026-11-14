@@ -35,58 +35,58 @@ void CheckEq(const std::string& got, const std::string& want, const char* expr, 
 #define CHECK_EQ(a, b) CheckEq((a), (b), #a " == " #b, __LINE__)
 
 void TestSiteOf() {
-    CHECK_EQ(diw::BrowserSiteOf("https://www.bilibili.com/video/BV1xx"), "bilibili.com");
-    CHECK_EQ(diw::BrowserSiteOf("https://bilibili.com"), "bilibili.com");
-    CHECK_EQ(diw::BrowserSiteOf("http://m.bilibili.com/video"), "bilibili.com");
-    CHECK_EQ(diw::BrowserSiteOf("https://chat.deepseek.com/a/chat/s/1"), "chat.deepseek.com");
-    CHECK_EQ(diw::BrowserSiteOf("https://example.com:8443/x"), "example.com");
-    CHECK_EQ(diw::BrowserSiteOf("https://user:pw@example.com/x"), "example.com");
-    CHECK_EQ(diw::BrowserSiteOf("about:blank"), "about");
-    CHECK_EQ(diw::BrowserSiteOf(""), "");
+    CHECK_EQ(bi::BrowserSiteOf("https://www.bilibili.com/video/BV1xx"), "bilibili.com");
+    CHECK_EQ(bi::BrowserSiteOf("https://bilibili.com"), "bilibili.com");
+    CHECK_EQ(bi::BrowserSiteOf("http://m.bilibili.com/video"), "bilibili.com");
+    CHECK_EQ(bi::BrowserSiteOf("https://chat.deepseek.com/a/chat/s/1"), "chat.deepseek.com");
+    CHECK_EQ(bi::BrowserSiteOf("https://example.com:8443/x"), "example.com");
+    CHECK_EQ(bi::BrowserSiteOf("https://user:pw@example.com/x"), "example.com");
+    CHECK_EQ(bi::BrowserSiteOf("about:blank"), "about");
+    CHECK_EQ(bi::BrowserSiteOf(""), "");
     // 端口与查询串都不能漏进站名里：它们会直接影响 favicon 的查表键。
-    CHECK_EQ(diw::BrowserSiteOf("https://www.google.com/search?q=a+b&rlz=1"), "google.com");
+    CHECK_EQ(bi::BrowserSiteOf("https://www.google.com/search?q=a+b&rlz=1"), "google.com");
 }
 
 void TestSiteLabel() {
-    CHECK_EQ(diw::BrowserSiteLabel("bilibili.com"), "哔哩哔哩");
-    CHECK_EQ(diw::BrowserSiteLabel("github.com"), "GitHub");
+    CHECK_EQ(bi::BrowserSiteLabel("bilibili.com"), "哔哩哔哩");
+    CHECK_EQ(bi::BrowserSiteLabel("github.com"), "GitHub");
     // 子域名兜底：lesson 里的名字应该照样认出来。
-    CHECK_EQ(diw::BrowserSiteLabel("space.bilibili.com"), "哔哩哔哩");
+    CHECK_EQ(bi::BrowserSiteLabel("space.bilibili.com"), "哔哩哔哩");
     // 表里没有的原样返回 —— 编一个错的中文名比显示域名更难理解。
-    CHECK_EQ(diw::BrowserSiteLabel("some-unknown-site.dev"), "some-unknown-site.dev");
-    CHECK_EQ(diw::BrowserSiteLabel(""), "");
+    CHECK_EQ(bi::BrowserSiteLabel("some-unknown-site.dev"), "some-unknown-site.dev");
+    CHECK_EQ(bi::BrowserSiteLabel(""), "");
 }
 
 void TestCleanTitle() {
-    CHECK_EQ(diw::BrowserCleanTitle("【原创】某视频 - 哔哩哔哩"), "【原创】某视频");
-    CHECK_EQ(diw::BrowserCleanTitle("octocat/Hello-World · GitHub"), "octocat/Hello-World");
+    CHECK_EQ(bi::BrowserCleanTitle("【原创】某视频 - 哔哩哔哩"), "【原创】某视频");
+    CHECK_EQ(bi::BrowserCleanTitle("octocat/Hello-World · GitHub"), "octocat/Hello-World");
     // 尾部不属于已知站点时不能剪：页面标题自己就带 " - " 的情况非常常见。
-    CHECK_EQ(diw::BrowserCleanTitle("问题 - Stack Overflow 中文"), "问题 - Stack Overflow 中文");
-    CHECK_EQ(diw::BrowserCleanTitle(""), "");
+    CHECK_EQ(bi::BrowserCleanTitle("问题 - Stack Overflow 中文"), "问题 - Stack Overflow 中文");
+    CHECK_EQ(bi::BrowserCleanTitle(""), "");
 }
 
 void TestOwnsMedia() {
     // 正例：SMTC 里 Chrome 的两个常见 app_id 形态
-    CHECK(diw::BrowserOwnsMedia("Chrome", "Google Chrome", "chrome", "Google Chrome", "chrome"));
-    CHECK(diw::BrowserOwnsMedia("msedge.exe", "Microsoft Edge", "edge", "Microsoft Edge", "msedge"));
+    CHECK(bi::BrowserOwnsMedia("Chrome", "Google Chrome", "chrome", "Google Chrome", "chrome"));
+    CHECK(bi::BrowserOwnsMedia("msedge.exe", "Microsoft Edge", "edge", "Microsoft Edge", "msedge"));
     // 反例：别的播放器
-    CHECK(!diw::BrowserOwnsMedia("QQMusic.exe", "QQ音乐", "chrome", "Google Chrome", "chrome"));
-    CHECK(!diw::BrowserOwnsMedia("", "", "chrome", "Google Chrome", "chrome"));
+    CHECK(!bi::BrowserOwnsMedia("QQMusic.exe", "QQ音乐", "chrome", "Google Chrome", "chrome"));
+    CHECK(!bi::BrowserOwnsMedia("", "", "chrome", "Google Chrome", "chrome"));
     // 关键反例：WebView2 宿主。它的进程名含 "msedge"，早期版本正是被这条
     // 误判成「Edge 在放媒体」，导致真正的浏览器岛被去重掉、永远不出现。
-    CHECK(!diw::BrowserOwnsMedia("msedgewebview2.exe", "", "edge", "Microsoft Edge", "msedge"));
+    CHECK(!bi::BrowserOwnsMedia("msedgewebview2.exe", "", "edge", "Microsoft Edge", "msedge"));
 }
 
 void TestPresent() {
-    diw::BrowserPage p;
+    bi::BrowserPage p;
     CHECK(!p.Present());            // 什么都没有
     p.title = "某页面";             // 有标题但不在前台
     CHECK(!p.Present());
     p.foreground = true;
     CHECK(p.Present());
     // 后台但有下载：要出现（用户正在等它）
-    diw::BrowserPage q;
-    q.downloads.push_back(diw::BrowserDownload{});
+    bi::BrowserPage q;
+    q.downloads.push_back(bi::BrowserDownload{});
     q.downloads.front().name = "a.zip";
     CHECK(q.Present());
     CHECK(q.Interesting());

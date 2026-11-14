@@ -1,7 +1,7 @@
-// DynamicIsland-Win 核心域：Activity 与其支撑组件（C++17，header-only）。
+// balance_island 核心域：Activity 与其支撑组件（C++17，header-only）。
 // 语义与 core/*.py 参考实现一一对应；常量来自 contracts/Types.hpp，不重复定义。
-#ifndef DIW_SRC_CORE_ACTIVITY_HPP
-#define DIW_SRC_CORE_ACTIVITY_HPP
+#ifndef BI_SRC_CORE_ACTIVITY_HPP
+#define BI_SRC_CORE_ACTIVITY_HPP
 
 #include <algorithm>
 #include <functional>
@@ -13,7 +13,7 @@
 
 #include "Types.hpp"
 
-namespace diw {
+namespace bi {
 
 // ---------- 过期与可见性：纯函数，不修改实例 ----------
 
@@ -348,6 +348,6 @@ private:
     bool has_ticked_ = false;
 };
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_CORE_ACTIVITY_HPP
+#endif  // BI_SRC_CORE_ACTIVITY_HPP

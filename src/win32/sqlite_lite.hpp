@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 极简 SQLite 只读封装（动态绑定系统自带的 winsqlite3.dll）
+// balance_island / 极简 SQLite 只读封装（动态绑定系统自带的 winsqlite3.dll）
 //
 // 为什么需要它：
 //   Cursor 和 ZCode 把会话存在 SQLite 里（`state.vscdb` / `db.sqlite`），
@@ -13,8 +13,8 @@
 // 只读语义：一律 SQLITE_OPEN_READONLY + URI。**绝不写别人的数据库**：
 //   Cursor 正在运行时持有写锁，我们用 `?mode=ro` 打开，读不到最新事务
 //   （WAL 未 checkpoint 的部分）就等下一秒再读，绝不尝试 checkpoint。
-#ifndef DIW_SRC_WIN32_SQLITE_LITE_HPP
-#define DIW_SRC_WIN32_SQLITE_LITE_HPP
+#ifndef BI_SRC_WIN32_SQLITE_LITE_HPP
+#define BI_SRC_WIN32_SQLITE_LITE_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -29,7 +29,7 @@
 #include <string>
 #include <vector>
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 // SQLite 的常量（避免依赖 sqlite3.h：那会把整个第三方头文件拖进来）
@@ -247,6 +247,6 @@ inline std::wstring UriToWindowsPath(const std::string& uri) {
 }
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_SQLITE_LITE_HPP
+#endif  // BI_SRC_WIN32_SQLITE_LITE_HPP

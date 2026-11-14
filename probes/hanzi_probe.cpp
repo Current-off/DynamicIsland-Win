@@ -1,4 +1,4 @@
-// 繁转简探针：直接调产品代码 diw::win32::ToSimplified，验证系统 locale 能转换。
+// 繁转简探针：直接调产品代码 bi::win32::ToSimplified，验证系统 locale 能转换。
 // 依赖 zh-CN 语言包（本机是中文系统）；若系统没装，ToSimplified 会原样返回，
 // 此时这里会 FAIL —— 那说明「显示繁体」在这台机器上无法靠 LCMapStringEx 解决，
 // 需要换内置映射表。所以这个探针也是「要不要上大词表」的判据。
@@ -22,7 +22,7 @@ int main() {
     };
     int failed = 0;
     for (const auto& c : cases) {
-        const std::string got = diw::win32::ToSimplified(c.in);
+        const std::string got = bi::win32::ToSimplified(c.in);
         const bool ok = got == c.want;
         std::printf("  %s  \"%s\" -> \"%s\"", ok ? "ok  " : "FAIL", c.in, got.c_str());
         if (!ok) std::printf("  (want \"%s\")", c.want);

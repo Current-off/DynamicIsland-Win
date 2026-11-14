@@ -22,7 +22,7 @@ void Check(bool cond, const char* name, int line) {
 
 #define CHECK(expr) Check((expr), #expr, __LINE__)
 
-using namespace diw;
+using namespace bi;
 
 Activity Make(const std::string& id, double score = 0.0,
               std::int64_t created = 0, const std::string& kind = "media") {
@@ -266,8 +266,8 @@ void TestRestartAfterEnd() {
 // IPC 协议解码：与 docs/protocol.md 的 v1 判定顺序一致。
 // 这里只测"协议对不对"，不测管道读写（那属于 win32 层，需要真句柄）。
 void TestIpcDecode() {
-    using diw::ipc::DecodeLine;
-    using diw::ipc::Request;
+    using bi::ipc::DecodeLine;
+    using bi::ipc::Request;
     std::string err;
     Request req;
 
@@ -341,7 +341,7 @@ void TestIpcDecode() {
 }  // namespace
 
 int main() {
-    std::printf("DynamicIsland-Win / C++ core unit tests (MSVC C++17)\n");
+    std::printf("balance_island / C++ core unit tests (MSVC C++17)\n");
     TestActivityExpiry();
     TestStore();
     TestScheduler();

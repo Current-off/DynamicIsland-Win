@@ -23,7 +23,7 @@
 **方式 A（本项目推荐，已验证）**：直接用一键脚本，无需手工配置环境变量。
 
 ```bash
-cd DynamicIsland-Win
+cd balance_island
 bash tools/build_cpp_msvc.sh
 ```
 

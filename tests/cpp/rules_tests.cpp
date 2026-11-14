@@ -24,7 +24,7 @@ void Check(bool cond, const char* name, int line) {
 }
 #define CHECK(expr) Check((expr), #expr, __LINE__)
 
-using namespace diw;
+using namespace bi;
 
 void TestMiniJson() {
     json::Value root;
@@ -572,7 +572,7 @@ void TestClipboardLaunchPath() {
 }  // namespace
 
 int main() {
-    std::printf("DynamicIsland-Win / rules + live mapping unit tests\n");
+    std::printf("balance_island / rules + live mapping unit tests\n");
     TestMiniJson();
     TestExtensionAndClock();
     TestSecrets();

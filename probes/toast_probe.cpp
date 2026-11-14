@@ -19,7 +19,7 @@
 #include <string>
 
 int wmain(int argc, wchar_t** argv) {
-    const wchar_t* title = L"灵动岛实时通知测试";
+    const wchar_t* title = L"平衡岛实时通知测试";
     const wchar_t* body = L"这条是刚刚发出的真实系统通知";
     bool clear_first = false;
     int base = 1;

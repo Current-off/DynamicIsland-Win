@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 真实数据采集层（Win32 + C++/WinRT）
+// balance_island / 真实数据采集层（Win32 + C++/WinRT）
 //
 // 职责：只负责「把系统状态读成 Snapshot」，不做任何取舍与文案。
 // 该不该弹、弹多久、谁能盖住谁，全部在 core/live_mapping.hpp + core/rules.hpp。
@@ -17,8 +17,8 @@
 //   - UserNotificationListener                          未打包返回 Allowed
 //   - 剪贴板 CF_UNICODETEXT / CF_DIB / CF_HDROP         免管理员可用
 //   - WM_DEVICECHANGE + DEV_BROADCAST_VOLUME            拿到盘符
-#ifndef DIW_SRC_WIN32_LIVE_SOURCES_HPP
-#define DIW_SRC_WIN32_LIVE_SOURCES_HPP
+#ifndef BI_SRC_WIN32_LIVE_SOURCES_HPP
+#define BI_SRC_WIN32_LIVE_SOURCES_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -76,7 +76,7 @@
 #include "meeting_sources.hpp"
 #include "live_mapping.hpp"
 
-namespace diw {
+namespace bi {
 namespace live {
 
 // ---------------------------------------------------------------- 字符串
@@ -129,7 +129,7 @@ inline std::int64_t FileTimeToMs(const FILETIME& ft) {
 // ---------------------------------------------------------------- 专辑封面
 //
 // SMTC 暴露的是 IRandomAccessStreamReference（不透明句柄），必须自己解码。
-// 解码结果落到 %LOCALAPPDATA%\DynamicIsland-Win\covers\<hash>.png：
+// 解码结果落到 %LOCALAPPDATA%\balance_island\covers\<hash>.png：
 //   - 不放进 content_json：那是文本协议，塞二进制要么 base64 膨胀 33%，
 //     要么让 Activity 依赖平台类型（它是跨层契约，必须保持纯数据）。
 //   - 按 app+曲名 做文件名哈希：同一首歌反复读会话时命中缓存，不重复解码。
@@ -154,7 +154,7 @@ inline bool CoverCacheDir(std::wstring* out) {
     }
     std::wstring base(raw);
     ::CoTaskMemFree(raw);
-    const std::wstring app_dir = base + L"\\DynamicIsland-Win";
+    const std::wstring app_dir = base + L"\\balance_island";
     const std::wstring dir = app_dir + L"\\covers";
     ::CreateDirectoryW(app_dir.c_str(), nullptr);
     ::CreateDirectoryW(dir.c_str(), nullptr);
@@ -1265,7 +1265,7 @@ private:
                     if (!props) continue;
                     alt.present = true;
                     alt.app_id = app;
-                    alt.app_label = diw::detail::FriendlyAppName(app);
+                    alt.app_label = bi::detail::FriendlyAppName(app);
                     alt.title = Narrow(props.Title());
                     if (alt.title.empty()) continue;  // 空标题的会话没东西可展示
                     alt.artist = Narrow(props.Artist());
@@ -1361,7 +1361,7 @@ private:
                     continue;
                 }
                 if (m.app_id.empty()) continue;
-                m.app_label = diw::detail::FriendlyAppName(m.app_id);
+                m.app_label = bi::detail::FriendlyAppName(m.app_id);
                 try {
                     if (auto info = sess.GetPlaybackInfo()) {
                         m.playing =
@@ -1935,6 +1935,6 @@ private:
 };
 
 }  // namespace live
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_LIVE_SOURCES_HPP
+#endif  // BI_SRC_WIN32_LIVE_SOURCES_HPP

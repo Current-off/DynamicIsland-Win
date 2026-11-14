@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 在线歌词
+// balance_island / 在线歌词
 //
 // 背景：Windows 的 SMTC（系统媒体传输控制）只暴露歌名 / 歌手 / 专辑 / 封面 /
 // 播放进度，**不提供歌词**。想要歌词必须自己找数据源。
@@ -14,8 +14,8 @@
 //   3. 无网络 / 超时 / 无结果都要有明确状态，界面显示占位而不是空白。
 //   4. 纯函数（ParseLrc / SelectLyricLines / UrlEncode / ExtractJsonString）
 //      与 I/O 分离，前者可直接单测。
-#ifndef DIW_SRC_WIN32_LYRICS_HPP
-#define DIW_SRC_WIN32_LYRICS_HPP
+#ifndef BI_SRC_WIN32_LYRICS_HPP
+#define BI_SRC_WIN32_LYRICS_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -38,7 +38,7 @@
 #include <thread>
 #include <vector>
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 struct LyricLine {
@@ -314,9 +314,9 @@ inline bool HttpGetOnce(const std::wstring& host, const std::wstring& path,
         }
     };
     HINTERNET session = proxy.empty()
-        ? ::WinHttpOpen(L"DynamicIsland-Win/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        ? ::WinHttpOpen(L"balance_island/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)
-        : ::WinHttpOpen(L"DynamicIsland-Win/1.0", WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+        : ::WinHttpOpen(L"balance_island/1.0", WINHTTP_ACCESS_TYPE_NAMED_PROXY,
                         proxy.c_str(), WINHTTP_NO_PROXY_BYPASS, 0);
     if (session == nullptr) {
         fail("WinHttpOpen", ::GetLastError());
@@ -545,6 +545,6 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_LYRICS_HPP
+#endif  // BI_SRC_WIN32_LYRICS_HPP

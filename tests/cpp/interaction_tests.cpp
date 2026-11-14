@@ -10,13 +10,13 @@
 #include "../../src/win32/lyrics.hpp"
 #include "../../src/win32/renderer.hpp"
 
-using diw::win32::ExpandedHitAreas;
-using diw::win32::ExtractFirstNonEmptyJsonString;
-using diw::win32::LyricLine;
-using diw::win32::ParseLrc;
-using diw::win32::ProgressFromX;
-using diw::win32::SelectLyricLines;
-using diw::win32::UrlEncodeUtf8;
+using bi::win32::ExpandedHitAreas;
+using bi::win32::ExtractFirstNonEmptyJsonString;
+using bi::win32::LyricLine;
+using bi::win32::ParseLrc;
+using bi::win32::ProgressFromX;
+using bi::win32::SelectLyricLines;
+using bi::win32::UrlEncodeUtf8;
 
 static int g_run = 0;
 static int g_failed = 0;

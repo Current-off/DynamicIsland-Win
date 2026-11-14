@@ -1,9 +1,9 @@
-// DynamicIsland-Win / IProvider.hpp
+// balance_island / IProvider.hpp
 // Provider 插件接口。每个 Provider 独立启停；单个 Provider 异常不得影响其他 Provider。
 //
 // 状态：接口契约（阶段 S3），已通过 MSVC C++17 编译验证。
-#ifndef DIW_CONTRACTS_I_PROVIDER_HPP
-#define DIW_CONTRACTS_I_PROVIDER_HPP
+#ifndef BI_CONTRACTS_I_PROVIDER_HPP
+#define BI_CONTRACTS_I_PROVIDER_HPP
 
 #include <cstdint>
 #include <optional>
@@ -12,7 +12,7 @@
 
 #include "Types.hpp"
 
-namespace diw {
+namespace bi {
 
 struct ProviderUpdate {
     std::optional<Activity> upsert;
@@ -33,6 +33,6 @@ public:
     virtual std::vector<ProviderUpdate> Poll(std::int64_t now_ms) = 0;
 };
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_CONTRACTS_I_PROVIDER_HPP
+#endif  // BI_CONTRACTS_I_PROVIDER_HPP

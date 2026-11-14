@@ -1,4 +1,4 @@
-// DynamicIsland-Win 核心域：IPC 协议解码（C++17，无平台依赖）
+// balance_island 核心域：IPC 协议解码（C++17，无平台依赖）
 //
 // 与 docs/protocol.md 的 v1 协议一一对应，也与 Python 侧的可执行规约
 // bridge/protocol.py::decode 保持同一套判定顺序：
@@ -8,8 +8,8 @@
 //
 // 放在 core 而不是 win32，是为了让"协议对不对"能被纯逻辑测试覆盖，
 // 而"管道怎么读写"才属于采集层。
-#ifndef DIW_SRC_CORE_IPC_PROTOCOL_HPP
-#define DIW_SRC_CORE_IPC_PROTOCOL_HPP
+#ifndef BI_SRC_CORE_IPC_PROTOCOL_HPP
+#define BI_SRC_CORE_IPC_PROTOCOL_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -19,7 +19,7 @@
 #include "Types.hpp"
 #include "mini_json.hpp"
 
-namespace diw {
+namespace bi {
 namespace ipc {
 
 constexpr int kProtocolVersion = 1;
@@ -193,6 +193,6 @@ inline bool DecodeLine(const std::string& raw_line, Request* out, std::string* e
 }
 
 }  // namespace ipc
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_CORE_IPC_PROTOCOL_HPP
+#endif  // BI_SRC_CORE_IPC_PROTOCOL_HPP

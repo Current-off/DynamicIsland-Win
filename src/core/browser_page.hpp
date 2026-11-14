@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace diw {
+namespace bi {
 
 struct BrowserDownload {
     std::string name;        // 文件名（去掉路径）
@@ -205,4 +205,4 @@ inline bool BrowserOwnsMedia(const std::string& media_app_id, const std::string&
     return false;
 }
 
-}  // namespace diw
+}  // namespace bi

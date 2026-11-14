@@ -18,7 +18,7 @@ class ActivityState(str, Enum):
 
 
 class Presentation(str, Enum):
-    """灵动岛三态呈现（WWDC23 10194）。"""
+    """三态呈现（参照 iOS 灵动岛 / WWDC23 10194）。"""
     COMPACT = "compact"
     MINIMAL = "minimal"
     EXPANDED = "expanded"

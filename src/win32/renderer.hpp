@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 胶囊渲染器（C++17 + GDI+）
+// balance_island / 胶囊渲染器（C++17 + GDI+）
 //
 // 只做「把 CapsuleView 画成像素」这一件事，不读时钟、不持状态、不碰调度，
 // 因此可以用固定输入做确定性截图比对（见 tools/snapshot_cpp.sh）。
@@ -11,8 +11,8 @@
 //      上 0.30 → 下 0.045 才像一圈被光打过的玻璃边。
 //   3. 投影必须真实模糊：多层同心矩形在浅色背景上是肉眼可见的「洋葱圈」
 //      色带（用户感知为毛边）。离屏盒模糊给出单调平滑的 alpha 衰减。
-#ifndef DIW_SRC_WIN32_RENDERER_HPP
-#define DIW_SRC_WIN32_RENDERER_HPP
+#ifndef BI_SRC_WIN32_RENDERER_HPP
+#define BI_SRC_WIN32_RENDERER_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -34,7 +34,7 @@
 #include <string>
 #include <vector>
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 // 渲染层布局常量（像素，96 DPI 基准；实际按 scale 放大）。
@@ -2586,6 +2586,6 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_RENDERER_HPP
+#endif  // BI_SRC_WIN32_RENDERER_HPP

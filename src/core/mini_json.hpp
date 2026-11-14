@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 极简 JSON 读写（C++17，无第三方依赖）
+// balance_island / 极简 JSON 读写（C++17，无第三方依赖）
 //
 // 为什么自己写：规则配置文件是用户手改的，必须容错；而引入 nlohmann/json 会让
 // 「clone 下来就能 cl / cmake 直接编」这件事变成需要包管理器。解析器只支持
@@ -8,8 +8,8 @@
 //   1. 解析失败不抛异常，返回 false + 错误位置，调用方回落到默认规则。
 //   2. 数字一律存 double，取整数时由调用方转；配置文件里的都是小整数。
 //   3. 序列化输出 2 空格缩进，保证人手改过的文件 diff 干净。
-#ifndef DIW_SRC_CORE_MINI_JSON_HPP
-#define DIW_SRC_CORE_MINI_JSON_HPP
+#ifndef BI_SRC_CORE_MINI_JSON_HPP
+#define BI_SRC_CORE_MINI_JSON_HPP
 
 #include <cmath>
 #include <cstdio>
@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace diw {
+namespace bi {
 namespace json {
 
 struct Value {
@@ -367,6 +367,6 @@ inline std::string FormatNumber(double value) {
 inline std::string Quote(const std::string& in) { return "\"" + Escape(in) + "\""; }
 
 }  // namespace json
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_CORE_MINI_JSON_HPP
+#endif  // BI_SRC_CORE_MINI_JSON_HPP

@@ -1,8 +1,8 @@
-// 探针：制造一个「真实的系统媒体会话」，用于端到端验证灵动岛的媒体链路。
+// 探针：制造一个「真实的系统媒体会话」，用于端到端验证平衡岛的媒体链路。
 //
 // 关键点：这不是伪造数据。MediaPlayer 注册的是和网易云 / QQ 音乐 / 浏览器
 // 完全相同的 GlobalSystemMediaTransportControlsSessionManager 会话，
-// 灵动岛那边读到的路径与实际听歌时一字不差。
+// 平衡岛那边读到的路径与实际听歌时一字不差。
 //
 // 用静音 WAV（全零采样），所以不会出声打扰。
 // 标题故意写成「SMTC 链路验证」，避免和用户真实歌曲混淆。
@@ -130,7 +130,7 @@ int wmain(int argc, wchar_t** argv) {
             auto props = item.GetDisplayProperties();
             props.Type(winrt::Windows::Media::MediaPlaybackType::Music);
             props.MusicProperties().Title(t.c_str());
-            props.MusicProperties().Artist(L"DynamicIsland-Win");
+            props.MusicProperties().Artist(L"balance_island");
             props.MusicProperties().AlbumTitle(L"真实会话通道");
             // 给会话挂一张真实封面，用来验证「SMTC Thumbnail → 解码 → 落盘 → 渲染」整条链路。
             if (::GetFileAttributesW(kCover) != INVALID_FILE_ATTRIBUTES) {

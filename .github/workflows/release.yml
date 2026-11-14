@@ -44,6 +44,9 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           $zip = (Get-Item build/dist/*.zip).FullName
           if (-not $zip) { throw "打包没有产出 zip" }
+          # 未签名程序靠可核验哈希建立信任；校验清单必须和 zip 一起挂上去。
+          $sums = (Get-Item "build/dist/SHA256SUMS-${tag}.txt").FullName
+          if (-not $sums) { throw "打包没有产出校验清单" }
           $size = [math]::Round((Get-Item $zip).Length / 1MB, 2)
           "即将发布 $tag（$size MB）"
 
@@ -51,9 +54,9 @@ jobs:
           # 这种情况改为覆盖上传，避免同一个版本号下出现两份包。
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $zip --clobber
+            gh release upload $tag $zip $sums --clobber
           } else {
-            gh release create $tag $zip --title $tag --generate-notes
+            gh release create $tag $zip $sums --title $tag --generate-notes
           }
           if ($LASTEXITCODE -ne 0) { throw "gh release 失败（退出码 $LASTEXITCODE）" }
           "发布完成：https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"

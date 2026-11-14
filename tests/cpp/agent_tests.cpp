@@ -7,21 +7,21 @@
 
 #include "../../src/core/agent_session.hpp"
 
-using diw::AgentEvent;
-using diw::AgentSession;
-using diw::AgentStateAt;
-using diw::AgentTodo;
-using diw::ApplyAgentEvent;
-using diw::EllipsizeUtf8;
-using diw::Iso8601ToMs;
-using diw::LooksLikeSystemText;
-using diw::OneLine;
-using diw::ParseAgentJsonLine;
-using diw::ParseGeminiSession;
-using diw::ProjectOf;
-using diw::TokenText;
-using diw::ToolTarget;
-using diw::ToolVerb;
+using bi::AgentEvent;
+using bi::AgentSession;
+using bi::AgentStateAt;
+using bi::AgentTodo;
+using bi::ApplyAgentEvent;
+using bi::EllipsizeUtf8;
+using bi::Iso8601ToMs;
+using bi::LooksLikeSystemText;
+using bi::OneLine;
+using bi::ParseAgentJsonLine;
+using bi::ParseGeminiSession;
+using bi::ProjectOf;
+using bi::TokenText;
+using bi::ToolTarget;
+using bi::ToolVerb;
 
 static int g_run = 0;
 static int g_failed = 0;
@@ -100,14 +100,14 @@ void TestTextHelpers() {
     CHECK_EQ(ProjectOf(""), "");
 
     // 时间戳式目录名对用户没有信息量，会被换成会话标题（见 live_mapping）。
-    CHECK(diw::IsGenericProjectName("2026-11-12-14-12-37"));
-    CHECK(diw::IsGenericProjectName("20261112"));
+    CHECK(bi::IsGenericProjectName("2026-11-12-14-12-37"));
+    CHECK(bi::IsGenericProjectName("20261112"));
     // 32 位 hex（uuid 去横线）：含 a-f 字母，原来判不出来，会被当标题直接显示
-    CHECK(diw::IsGenericProjectName("d3b07384d9ed4c1c9f2b4c1e2f3a4b5c"));
-    CHECK(diw::IsGenericProjectName("d3b07384-d9ed-4c1c-9f2b-4c1e2f3a4b5c"));
-    CHECK(!diw::IsGenericProjectName("DynamicIsland-Win"));
-    CHECK(!diw::IsGenericProjectName("api-server"));
-    CHECK(!diw::IsGenericProjectName(""));
+    CHECK(bi::IsGenericProjectName("d3b07384d9ed4c1c9f2b4c1e2f3a4b5c"));
+    CHECK(bi::IsGenericProjectName("d3b07384-d9ed-4c1c-9f2b-4c1e2f3a4b5c"));
+    CHECK(!bi::IsGenericProjectName("balance_island"));
+    CHECK(!bi::IsGenericProjectName("api-server"));
+    CHECK(!bi::IsGenericProjectName(""));
 
     CHECK_EQ(ToolVerb("Edit"), "正在编辑");
     CHECK_EQ(ToolVerb("Bash"), "正在执行");
@@ -128,55 +128,55 @@ void TestTextHelpers() {
 }
 
 void TestToolTarget() {
-    diw::json::Value input;
-    CHECK(diw::json::Parse(R"({"file_path":"C:\\proj\\src\\win32\\renderer.hpp"})", input, nullptr));
+    bi::json::Value input;
+    CHECK(bi::json::Parse(R"({"file_path":"C:\\proj\\src\\win32\\renderer.hpp"})", input, nullptr));
     CHECK_EQ(ToolTarget("Edit", input), "win32/renderer.hpp");
 
-    diw::json::Value shell;
-    CHECK(diw::json::Parse(R"({"command":["bash","-lc","npm test -- --watch=false"]})", shell, nullptr));
+    bi::json::Value shell;
+    CHECK(bi::json::Parse(R"({"command":["bash","-lc","npm test -- --watch=false"]})", shell, nullptr));
     CHECK_EQ(ToolTarget("shell", shell), "npm test -- --watch=false");
 
-    diw::json::Value grep;
-    CHECK(diw::json::Parse(R"({"pattern":"BoxBlurAxis","path":"src"})", grep, nullptr));
+    bi::json::Value grep;
+    CHECK(bi::json::Parse(R"({"pattern":"BoxBlurAxis","path":"src"})", grep, nullptr));
     CHECK_EQ(ToolTarget("Grep", grep), "BoxBlurAxis");
 
-    diw::json::Value url;
-    CHECK(diw::json::Parse(R"({"url":"https://github.com/Liset999/ZenDesktop/"})", url, nullptr));
+    bi::json::Value url;
+    CHECK(bi::json::Parse(R"({"url":"https://github.com/Liset999/ZenDesktop/"})", url, nullptr));
     CHECK_EQ(ToolTarget("WebFetch", url), "github.com/Liset999/ZenDesktop");
 
     // 环境准备段不该占满整行：`cd ... && 真命令` 只显示后半段。
-    diw::json::Value cd;
-    CHECK(diw::json::Parse(R"({"command":"cd \"C:/p/demo\" && npm test"})", cd, nullptr));
+    bi::json::Value cd;
+    CHECK(bi::json::Parse(R"({"command":"cd \"C:/p/demo\" && npm test"})", cd, nullptr));
     CHECK_EQ(ToolTarget("Bash", cd), "npm test");
-    diw::json::Value plain;
-    CHECK(diw::json::Parse(R"({"command":"git status"})", plain, nullptr));
+    bi::json::Value plain;
+    CHECK(bi::json::Parse(R"({"command":"git status"})", plain, nullptr));
     CHECK_EQ(ToolTarget("Bash", plain), "git status");
 
     // 环境准备段可以有多层，全部剥掉。
-    diw::json::Value env;
-    CHECK(diw::json::Parse(R"({"command":"export A=1 && export B=2 && ctest -V"})", env, nullptr));
+    bi::json::Value env;
+    CHECK(bi::json::Parse(R"({"command":"export A=1 && export B=2 && ctest -V"})", env, nullptr));
     CHECK_EQ(ToolTarget("Bash", env), "ctest -V");
 
     // 命令里嵌的脚本自带 &&：不能把后半截当成「真正的命令」。
-    diw::json::Value script;
-    CHECK(diw::json::Parse(R"({"command":"python -c \"if a && b: pass\""})", script, nullptr));
+    bi::json::Value script;
+    CHECK(bi::json::Parse(R"({"command":"python -c \"if a && b: pass\""})", script, nullptr));
     CHECK(ToolTarget("Bash", script).find("python -c") == 0);
 }
 
 void TestClaude() {
     const std::string blob = R"({"type":"summary","summary":"修岛不显示的问题"})"
                              "\n"
-                             R"({"type":"user","sessionId":"s1","cwd":"C:\\proj\\DynamicIsland-Win","message":{"role":"user","content":"<system-reminder>环境信息</system-reminder>"},"timestamp":"2024-01-01T00:00:00.000Z"})"
+                             R"({"type":"user","sessionId":"s1","cwd":"C:\\proj\\balance_island","message":{"role":"user","content":"<system-reminder>环境信息</system-reminder>"},"timestamp":"2024-01-01T00:00:00.000Z"})"
                              "\n"
-                             R"({"type":"user","sessionId":"s1","cwd":"C:\\proj\\DynamicIsland-Win","message":{"role":"user","content":"给岛加一个 agent 面板"},"timestamp":"2024-01-01T00:00:01.000Z"})"
+                             R"({"type":"user","sessionId":"s1","cwd":"C:\\proj\\balance_island","message":{"role":"user","content":"给岛加一个 agent 面板"},"timestamp":"2024-01-01T00:00:01.000Z"})"
                              "\n"
-                             R"({"type":"assistant","cwd":"C:\\proj\\DynamicIsland-Win","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":12000,"output_tokens":300},"content":[{"type":"text","text":"好的，我先看渲染层"},{"type":"tool_use","name":"Read","input":{"file_path":"C:\\proj\\DynamicIsland-Win\\src\\win32\\renderer.hpp"}}]},"timestamp":"2024-01-01T00:00:05.000Z"})"
+                             R"({"type":"assistant","cwd":"C:\\proj\\balance_island","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":12000,"output_tokens":300},"content":[{"type":"text","text":"好的，我先看渲染层"},{"type":"tool_use","name":"Read","input":{"file_path":"C:\\proj\\balance_island\\src\\win32\\renderer.hpp"}}]},"timestamp":"2024-01-01T00:00:05.000Z"})"
                              "\n"
-                             R"({"type":"assistant","cwd":"C:\\proj\\DynamicIsland-Win","message":{"model":"claude-sonnet-4-5","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"C:\\proj\\DynamicIsland-Win\\src\\win32\\renderer.hpp"}}]},"timestamp":"2024-01-01T00:00:09.000Z"})";
+                             R"({"type":"assistant","cwd":"C:\\proj\\balance_island","message":{"model":"claude-sonnet-4-5","content":[{"type":"tool_use","name":"Edit","input":{"file_path":"C:\\proj\\balance_island\\src\\win32\\renderer.hpp"}}]},"timestamp":"2024-01-01T00:00:09.000Z"})";
 
     const AgentSession s = Feed("claude", blob);
     CHECK(s.Present());
-    CHECK_EQ(s.project, "DynamicIsland-Win");
+    CHECK_EQ(s.project, "balance_island");
     CHECK_EQ(s.task, "修岛不显示的问题");  // summary 优先于首条 prompt
     CHECK_EQ(s.model, "claude-sonnet-4-5");
     CHECK_EQ(s.action, "正在编辑 win32/renderer.hpp");
@@ -330,9 +330,9 @@ void TestState() {
     CHECK_EQ(AgentStateAt(blank, 123456), "waiting");
 
     s.started_ms = 90000;
-    CHECK_EQ(diw::AgentElapsedText(s, 90000 + 65 * 1000), "01:05");
-    CHECK_EQ(diw::AgentElapsedText(s, 90000 + 3600 * 1000 * 2 + 5 * 60 * 1000), "2h05");
-    CHECK(diw::AgentElapsedText(s, 0).empty());
+    CHECK_EQ(bi::AgentElapsedText(s, 90000 + 65 * 1000), "01:05");
+    CHECK_EQ(bi::AgentElapsedText(s, 90000 + 3600 * 1000 * 2 + 5 * 60 * 1000), "2h05");
+    CHECK(bi::AgentElapsedText(s, 0).empty());
 }
 
 void TestBadLines() {

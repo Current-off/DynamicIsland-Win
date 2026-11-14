@@ -78,7 +78,7 @@ int wmain(int argc, wchar_t** argv) {
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = Proc;
     wc.hInstance = instance;
-    wc.lpszClassName = L"DIW_WhiteBackground";
+    wc.lpszClassName = L"BI_WhiteBackground";
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     ::RegisterClassExW(&wc);
 

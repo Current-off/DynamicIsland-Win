@@ -1,4 +1,4 @@
-﻿# 往岛上推一条活动 / 结束一条活动。
+# 往岛上推一条活动 / 结束一条活动。
 #
 #   powershell -ExecutionPolicy Bypass -File tools\send-activity.ps1
 #   powershell -ExecutionPolicy Bypass -File tools\send-activity.ps1 -Title "构建通过" -Kind bridge.ci
@@ -15,7 +15,7 @@ param(
     [int]$Score      = 80,
     [int]$StaleMs    = 8000,          # 0 表示不过期（会一直占着主位，慎用）
     [switch]$End,                     # 只结束，不新建
-    [string]$Pipe    = 'DynamicIslandWin-v1'
+    [string]$Pipe    = 'BalanceIsland-v1'
 )
 
 $ErrorActionPreference = 'Stop'

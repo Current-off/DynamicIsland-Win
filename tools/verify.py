@@ -18,7 +18,7 @@ from check_contracts import check  # noqa: E402
 
 def main() -> int:
     print("=" * 62)
-    print("DynamicIsland-Win / local verification")
+    print("balance_island / local verification")
     print(f"python: {sys.version.split()[0]}  root: {ROOT}")
     print("=" * 62)
 

@@ -29,7 +29,7 @@ def iso(dt):
 
 
 sid = str(uuid.uuid4())
-cwd = "C:\\Users\\ow1\\WorkBuddy\\2026-11-12-14-12-37\\DynamicIsland-Win"
+cwd = "C:\\Users\\ow1\\WorkBuddy\\2026-11-12-14-12-37\\balance_island"
 
 rows = []
 
@@ -104,7 +104,7 @@ rows.append({
         "content": [{
             "type": "tool_use",
             "name": "Bash",
-            "input": {"command": "cd \"C:/Users/ow1/WorkBuddy/DynamicIsland-Win\" && "
+            "input": {"command": "cd \"C:/Users/ow1/WorkBuddy/balance_island\" && "
                                  "tools/build_cpp_msvc.sh", "description": "构建并跑测试"},
         }],
     },

@@ -1,13 +1,13 @@
-﻿# 安装 / 卸载
+# 安装 / 卸载
 #
 #   安装： powershell -ExecutionPolicy Bypass -File tools\install.ps1
 #   自启： powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Autostart
 #   卸载： powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Uninstall
 #
-# 装到 %LOCALAPPDATA%\DynamicIsland-Win —— 不需要管理员权限，
+# 装到 %LOCALAPPDATA%\balance_island —— 不需要管理员权限，
 # 也不会往 Program Files 里写需要 UAC 的东西。
 #
-# 配置（rules.json）在 %APPDATA%\DynamicIsland-Win，和安装目录分开：
+# 配置（rules.json）在 %APPDATA%\balance_island，和安装目录分开：
 # 卸载时默认**保留**它，因为那是用户自己调过的外观和开关，重装应该还在。
 
 param(
@@ -19,17 +19,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$installDir = Join-Path $env:LOCALAPPDATA 'DynamicIsland-Win'
-$exePath = Join-Path $installDir 'diw_overlay.exe'
-$configDir = Join-Path $env:APPDATA 'DynamicIsland-Win'
+$installDir = Join-Path $env:LOCALAPPDATA 'balance_island'
+$exePath = Join-Path $installDir 'balance_island.exe'
+$configDir = Join-Path $env:APPDATA 'balance_island'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$runName = 'DynamicIslandWin'
+$runName = 'BalanceIsland'
 
 function Fail($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 function Info($msg) { Write-Host $msg }
 
 # 防止把安装目录算错之后删掉别的东西 —— 卸载前必须能对上这个后缀。
-if (-not $installDir.EndsWith('DynamicIsland-Win')) {
+if (-not $installDir.EndsWith('balance_island')) {
     Fail "安装目录异常，已中止：$installDir"
 }
 
@@ -37,7 +37,7 @@ if (-not $installDir.EndsWith('DynamicIsland-Win')) {
 if ($Uninstall) {
     Info "正在卸载…"
 
-    Get-Process -Name 'diw_overlay' -ErrorAction SilentlyContinue | ForEach-Object {
+    Get-Process -Name 'balance_island' -ErrorAction SilentlyContinue | ForEach-Object {
         $_ | Stop-Process -Force -ErrorAction SilentlyContinue
     }
 
@@ -50,8 +50,8 @@ if ($Uninstall) {
     }
 
     $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    foreach ($lnk in @((Join-Path $startMenu 'DynamicIsland-Win.lnk'),
-                       (Join-Path ([Environment]::GetFolderPath('Desktop')) 'DynamicIsland-Win.lnk'))) {
+    foreach ($lnk in @((Join-Path $startMenu 'balance_island.lnk'),
+                       (Join-Path ([Environment]::GetFolderPath('Desktop')) 'balance_island.lnk'))) {
         if (Test-Path $lnk) { Remove-Item $lnk -Force; Info "  已删除快捷方式 $(Split-Path -Leaf $lnk)" }
     }
 
@@ -72,7 +72,7 @@ if ($Uninstall) {
 }
 
 # ---------------------------------------------------------------- 安装
-$built = Join-Path $root 'build\cpp\diw_overlay.exe'
+$built = Join-Path $root 'build\cpp\balance_island.exe'
 if (-not (Test-Path $built)) {
     Fail "找不到 $built。请先运行 tools\build.ps1 编译。"
 }
@@ -80,23 +80,46 @@ if (-not (Test-Path $built)) {
 Info "安装到 $installDir"
 New-Item -ItemType Directory -Force $installDir | Out-Null
 
+# BI_LEGACY_: v0.1.x 升级清理。只删旧程序与旧快捷方式/自启项，
+# **不删旧配置目录** —— 程序启动时会把旧 rules.json 迁移到新目录。
+$BI_LEGACY_Exe = 'diw_overlay'                                     # BI_LEGACY_
+$BI_LEGACY_Dir = Join-Path $env:LOCALAPPDATA 'DynamicIsland-Win'   # BI_LEGACY_
+$BI_LEGACY_Lnk = 'DynamicIsland-Win.lnk'                           # BI_LEGACY_
+$BI_LEGACY_Run = 'DynamicIslandWin'                                # BI_LEGACY_
+Get-Process -Name $BI_LEGACY_Exe -ErrorAction SilentlyContinue | ForEach-Object {
+    $_ | Stop-Process -Force -ErrorAction SilentlyContinue
+    Info "  已结束旧版实例（PID $($_.Id)）"
+}
+foreach ($p in @((Join-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') $BI_LEGACY_Lnk),
+                 (Join-Path ([Environment]::GetFolderPath('Desktop')) $BI_LEGACY_Lnk))) {
+    if (Test-Path $p) { Remove-Item $p -Force; Info "  已移除旧快捷方式" }
+}
+if ((Get-ItemProperty $runKey -ErrorAction SilentlyContinue).$BI_LEGACY_Run) {
+    Remove-ItemProperty -Path $runKey -Name $BI_LEGACY_Run -ErrorAction SilentlyContinue
+    Info "  已移除旧开机自启项"
+}
+if ((Test-Path $BI_LEGACY_Dir) -and ($BI_LEGACY_Dir -ne $installDir)) {
+    Remove-Item $BI_LEGACY_Dir -Recurse -Force -ErrorAction SilentlyContinue
+    Info "  已清理旧安装目录（配置未动，下次启动自动迁移）"
+}
+
 # 覆盖前先结束正在跑的实例，否则复制会因文件占用失败。
-Get-Process -Name 'diw_overlay' -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Process -Name 'balance_island' -ErrorAction SilentlyContinue | ForEach-Object {
     $_ | Stop-Process -Force -ErrorAction SilentlyContinue
     Info "  已结束正在运行的实例（PID $($_.Id)）"
     Start-Sleep -Milliseconds 300
 }
 
 Copy-Item $built $exePath -Force
-Info "  已复制 diw_overlay.exe"
+Info "  已复制 balance_island.exe"
 
 # 开始菜单快捷方式（卸载/系统搜索都能用到）
-$lnkPath = Join-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') 'DynamicIsland-Win.lnk'
+$lnkPath = Join-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') 'balance_island.lnk'
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath = $exePath
 $lnk.WorkingDirectory = $installDir
-$lnk.Description = 'DynamicIsland-Win'
+$lnk.Description = 'balance_island'
 $lnk.Save()
 Info "  已创建开始菜单快捷方式"
 

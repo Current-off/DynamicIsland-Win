@@ -1,4 +1,4 @@
-// 缓存 LRU 回归探针：直接调用产品里的 diw::live::TrimCache，
+// 缓存 LRU 回归探针：直接调用产品里的 bi::live::TrimCache，
 // 验证「按最旧修改时间淘汰、保留最新 keep 个、未超限不动作」。
 //
 // 之前 covers/ 目录只增不减：听歌多 / 通知杂的机器上会无限膨胀。
@@ -112,7 +112,7 @@ void Purge(const std::wstring& dir) {
 
 int main() {
     const std::wstring dir = TempDir();
-    const int keep = diw::live::kCacheKeep;
+    const int keep = bi::live::kCacheKeep;
     std::printf("cache LRU probe: keep=%d, fixture=120 files\n", keep);
 
     Purge(dir);  // 复用上次残留的目录时先清空
@@ -121,7 +121,7 @@ int main() {
     Check(CountPng(dir) == 120, "fixture: 120 png created with increasing mtime");
 
     // ① 超上限：应裁到 keep 个，删最旧的 120-keep 个。
-    diw::live::TrimCache(dir, keep);
+    bi::live::TrimCache(dir, keep);
     const int after1 = CountPng(dir);
     Check(after1 == keep, "120 -> 96 (trim to keep)");
     bool oldest_gone = true, newest_kept = true;
@@ -135,11 +135,11 @@ int main() {
     Check(newest_kept, "newest 96 files kept");
 
     // ② 恰好在上限：不应删任何文件（幂等，避免每次写缓存都扫目录误删）。
-    diw::live::TrimCache(dir, keep);
+    bi::live::TrimCache(dir, keep);
     Check(CountPng(dir) == keep, "at limit: no file deleted (idempotent)");
 
     // ③ 更紧的上限：继续删最旧的，只留最后 10 个。
-    diw::live::TrimCache(dir, 10);
+    bi::live::TrimCache(dir, 10);
     Check(CountPng(dir) == 10, "96 -> 10 (tighter limit)");
     bool tail_kept = true;
     for (int i = 110; i < 120; ++i) {
@@ -148,7 +148,7 @@ int main() {
     Check(tail_kept, "only newest 10 remain (f110..f119)");
 
     // ④ 空目录 / 不存在的目录：不崩溃。
-    diw::live::TrimCache(dir + L"\\does_not_exist", keep);
+    bi::live::TrimCache(dir + L"\\does_not_exist", keep);
     Check(true, "missing dir: returns without crash");
 
     Purge(dir);

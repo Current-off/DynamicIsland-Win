@@ -1,0 +1,91 @@
+{
+  "name": "balance_island",
+  "display_name": "平衡岛",
+  "paradigm_version": "0.2.0",
+  "one_liner": "屏幕顶部的一枚注意力配重，不是一块状态舞台。",
+  "axioms": [
+    "岛不是操作台：深度操作回原应用，岛内只保留切换焦点与媒体的最小必要控制",
+    "存在感可确认但不常驻占用：安静态缩成呼吸点，回答「还在不在跑」",
+    "用户永远拥有让路权：一个即时手势即可穿透并降透明，不必关掉程序"
+  ],
+  "axes": {
+    "attention": "全知 vs 专注 —— 按「是否现在需要处理」分级，默认只显示 1 条主信息",
+    "presence": "常显 vs 消失 —— 活跃胶囊 / 休眠把手 / 安静呼吸点三态",
+    "control": "系统推送 vs 用户决定 —— dismiss 单条、暂停 30 分钟、静默某类源、按 Ctrl 让路"
+  },
+  "levels": {
+    "L0": "安静：无活动，呼吸点",
+    "L1": "环境：电量/音量/剪贴板等被动状态，短档胶囊，不主动展开",
+    "L2": "进行中：播放/Agent/下载/会议，主位 + 进度或状态",
+    "L3": "需处理：刚复制、通知到达、会话等待输入；短时提升后必须自动回落"
+  },
+  "rules": {
+    "collapsed_main_items": 1,
+    "max_detached_dots": 4,
+    "info_depth_max": 3,
+    "transition_max_ms": 400,
+    "enter_max_ms": 250,
+    "exit_max_ms": 167,
+    "quiet_alpha_min": 0.12,
+    "quiet_alpha_max": 0.3,
+    "quiet_breath_ms": 4000,
+    "corner_radius_px": 28.0,
+    "short_height": 80.0,
+    "media_height": 124.0,
+    "tall_height": 196.0,
+    "top_safe_inset": 4.0,
+    "contrast_min": 4.5,
+    "yield_opacity": 0.35
+  },
+  "cpp_constant_map": {
+    "collapsed_main_items": "kBalanceCollapsedMainItems",
+    "max_detached_dots": "kBalanceMaxDetachedDots",
+    "info_depth_max": "kBalanceInfoDepthMax",
+    "transition_max_ms": "kBalanceTransitionMaxMs",
+    "enter_max_ms": "kBalanceEnterMaxMs",
+    "exit_max_ms": "kBalanceExitMaxMs",
+    "quiet_alpha_min": "kBalanceQuietAlphaMin",
+    "quiet_alpha_max": "kBalanceQuietAlphaMax",
+    "quiet_breath_ms": "kBalanceQuietBreathMs",
+    "corner_radius_px": "kBalanceCornerRadiusPx",
+    "short_height": "kBalanceShortHeight",
+    "media_height": "kBalanceMediaHeight",
+    "tall_height": "kBalanceTallHeight",
+    "top_safe_inset": "kBalanceTopSafeInset",
+    "contrast_min": "kBalanceContrastMin",
+    "yield_opacity": "kBalanceYieldOpacity"
+  },
+  "interaction": {
+    "single_click": "渐进披露：展开 / 收起；不抢焦点、不弹模态",
+    "double_click": "一览：并置所有并行任务",
+    "detached_dot": "切换当前焦点到那一件",
+    "title": "回原应用，不在岛内打开二级界面",
+    "transport": "媒体的最小必要控制（上一首/±10s/播放暂停/下一首）",
+    "close_x": "dismiss 这一条，不是退出程序",
+    "hold_ctrl": "让路：鼠标穿透 + 降透明度（平衡岛独有语义）",
+    "context_menu": "设置 / 暂停 30 分钟 / 退出；托盘是唯一固定入口",
+    "fullscreen": "自动退让为把手，不在全屏内容上覆盖"
+  },
+  "visual": {
+    "shape": "圆角胶囊；安静态由 min(h/2, r) 自然得到正圆",
+    "materials": ["液态玻璃", "磨砂", "实色"],
+    "rim": "整圈均匀淡描边 + 顶部一条高光带（带高 = 圆角半径）；禁止整圈等高亮",
+    "rim_width": "clamp(h * 0.024, 1.5*scale, 3.2*scale)",
+    "color": "涨红跌绿；Agent 运行/等待/完成三态；品牌色不参与信息编码",
+    "motion": "仅状态迁移；弹簧阻尼比约 0.68；Reduce Motion 降级为 fade",
+    "text": "中文优先；字号随 DPI；正文对比度 >= 4.5:1"
+  },
+  "extension": {
+    "ipc_pipe": "\\\\.\\pipe\\BalanceIsland-v1",
+    "ipc_framing": "单行 JSON + 换行；一次连接一条消息；队列上限 256",
+    "config": "rules.json 本地配置，原子写 + 版本迁移",
+    "providers": "接口隔离，单源异常不影响其他源"
+  },
+  "boundaries": [
+    "不读聊天正文（隐私与风控）",
+    "不做账号、云同步、订阅分级",
+    "不内嵌浏览器引擎做常驻壳",
+    "不注入 explorer.exe，不改系统 shell",
+    "不把岛做成启动器 / 剪贴板管理器 / 待办工具的替代品"
+  ]
+}

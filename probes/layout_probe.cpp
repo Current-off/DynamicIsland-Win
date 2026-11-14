@@ -17,7 +17,7 @@
 
 #include "../src/win32/renderer.hpp"
 
-using namespace diw::win32;
+using namespace bi::win32;
 
 namespace {
 
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
         cases.push_back({"compact_media", v});
     }
     {
-        CapsuleView v = Base("agent", "DynamicIsland-Win", "正在编辑 renderer.hpp");
+        CapsuleView v = Base("agent", "balance_island", "正在编辑 renderer.hpp");
         v.agent = true;
         v.agent_provider = "claude";
         v.agent_name = "Claude Code";

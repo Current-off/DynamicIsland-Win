@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 编码 Agent 会话监视（Win32 文件 IO）
+// balance_island / 编码 Agent 会话监视（Win32 文件 IO）
 //
 // 只做三件事：
 //   1. 找到各家 Agent 落盘的会话文件（claude / workbuddy / codex / gemini）
@@ -13,8 +13,8 @@
 //   头 64KB 里有 sessionId / cwd / 第一条用户输入（用来显示「它在做什么任务」），
 //   尾 1MB 里有最近的动作与任务清单。中间的历史对「现在在干什么」没有价值，
 //   却占了 99% 的字节。
-#ifndef DIW_SRC_WIN32_AGENT_SOURCES_HPP
-#define DIW_SRC_WIN32_AGENT_SOURCES_HPP
+#ifndef BI_SRC_WIN32_AGENT_SOURCES_HPP
+#define BI_SRC_WIN32_AGENT_SOURCES_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -38,7 +38,7 @@
 #include "../core/agent_session.hpp"
 #include "sqlite_lite.hpp"
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 // 支持矩阵（写在这里，README 与设置界面引用同一份说法）：
@@ -866,6 +866,6 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_AGENT_SOURCES_HPP
+#endif  // BI_SRC_WIN32_AGENT_SOURCES_HPP

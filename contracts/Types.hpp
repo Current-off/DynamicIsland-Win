@@ -1,19 +1,19 @@
-// DynamicIsland-Win / Types.hpp
+// balance_island / Types.hpp
 // 跨语言共享类型定义。字段名与 core/activity.py::to_dict() 及 bridge/protocol.py 对齐。
 //
 // 状态：接口契约（阶段 S3），已通过 MSVC C++17 编译验证。
 // 使用传统 include guard 而非 #pragma once：同一头文件可能经由
 // "Types.hpp" 与 "../../contracts/Types.hpp" 两条路径被包含，
 // MSVC 会视为不同文件而重复定义（2026-11-12 真实编译暴露的缺陷）。
-#ifndef DIW_CONTRACTS_TYPES_HPP
-#define DIW_CONTRACTS_TYPES_HPP
+#ifndef BI_CONTRACTS_TYPES_HPP
+#define BI_CONTRACTS_TYPES_HPP
 
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
-namespace diw {
+namespace bi {
 
 enum class Presentation { Compact, Minimal, Expanded };
 enum class BackdropMode { Acrylic, LiquidGlass, OpaqueFallback };
@@ -63,6 +63,6 @@ constexpr double kConcentricMargin = 20.0;
 constexpr double kExpandedMinHeight = 84.0;
 constexpr double kExpandedMaxHeight = 160.0;
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_CONTRACTS_TYPES_HPP
+#endif  // BI_CONTRACTS_TYPES_HPP

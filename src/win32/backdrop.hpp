@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 玻璃背景捕获与模糊（C++17 + GDI+）
+// balance_island / 玻璃背景捕获与模糊（C++17 + GDI+）
 //
 // 职责：截取「胶囊背后的那块屏幕」，降采样 + 多趟盒式模糊 ≈ 高斯，
 // 交给渲染层做磨砂玻璃底。这是 Mac 风格透玻璃的唯一可靠路线：
@@ -18,8 +18,8 @@
 //      染色盖住，肉眼完全看不出。
 //
 // 全程无闪烁：不需要「隐藏窗口一帧再截」的把戏。
-#ifndef DIW_SRC_WIN32_BACKDROP_HPP
-#define DIW_SRC_WIN32_BACKDROP_HPP
+#ifndef BI_SRC_WIN32_BACKDROP_HPP
+#define BI_SRC_WIN32_BACKDROP_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -36,7 +36,7 @@
 #include <memory>
 #include <vector>
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 class Backdrop {
@@ -49,6 +49,52 @@ public:
     //   occlude_x/y/w/h：胶囊窗口在「本截图坐标系」里的矩形（会被截进画面的部分）。
     //   epoch：同几何尺寸的干净捕获；非空时用它的像素修补 occlude 矩形。
     // 返回 false 表示截屏失败（无桌面会话 / 锁屏等），调用方应回落到不透明样式。
+    // 轻量内容探测：只把目标区域缩成 32×8 的小图算指纹，不做全尺寸拷贝。
+    // 静止桌面时跳过每 2 秒一次的 2.3M 像素 BitBlt + 降采样 + 3 趟模糊
+    //（issue #1 报告里「桌面几乎没变却反复全屏抓屏」那条）。
+    // 采样失败时返回 true（保守当成"变了"），绝不因探测失败而漏更新。
+    bool ContentChanged(int x, int y, int w, int h) {
+        constexpr int kProbeW = 32;
+        constexpr int kProbeH = 8;
+        if (w <= 0 || h <= 0) return true;
+        HDC screen = ::GetDC(nullptr);
+        if (screen == nullptr) return true;
+        HDC mem = ::CreateCompatibleDC(screen);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = kProbeW;
+        info.bmiHeader.biHeight = -kProbeH;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HBITMAP dib = (mem != nullptr)
+                          ? ::CreateDIBSection(mem, &info, DIB_RGB_COLORS, &bits, nullptr, 0)
+                          : nullptr;
+        bool sampled = false;
+        std::uint64_t hash = 1469598103934665603ULL;  // FNV-1a offset basis
+        if (dib != nullptr && bits != nullptr) {
+            const HGDIOBJ prev = ::SelectObject(mem, dib);
+            ::SetStretchBltMode(mem, COLORONCOLOR);
+            if (::StretchBlt(mem, 0, 0, kProbeW, kProbeH, screen, x, y, w, h, SRCCOPY)) {
+                sampled = true;
+                const auto* p = static_cast<const std::uint8_t*>(bits);
+                for (std::size_t i = 0; i < static_cast<std::size_t>(kProbeW) * kProbeH * 4u; ++i) {
+                    hash ^= p[i];
+                    hash *= 1099511628211ULL;
+                }
+            }
+            ::SelectObject(mem, prev);
+            ::DeleteObject(dib);
+        }
+        if (mem != nullptr) ::DeleteDC(mem);
+        ::ReleaseDC(nullptr, screen);
+        if (!sampled) return true;
+        const bool changed = (hash != probe_hash_);
+        probe_hash_ = hash;
+        return changed;
+    }
+
     bool Capture(int x, int y, int w, int h, int occlude_x, int occlude_y, int occlude_w, int occlude_h,
                  const Backdrop* epoch) {
         if (w <= 0 || h <= 0) return false;
@@ -398,9 +444,10 @@ private:
     std::unique_ptr<Gdiplus::Bitmap> lite_bitmap_;
     int x_ = 0, y_ = 0;
     bool valid_ = false;
+    std::uint64_t probe_hash_ = 0;  // 上次探测到的桌面内容指纹
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_BACKDROP_HPP
+#endif  // BI_SRC_WIN32_BACKDROP_HPP

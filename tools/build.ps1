@@ -1,4 +1,4 @@
-﻿# 一键构建（Windows / MSVC，不需要开发者命令行）
+# 一键构建（Windows / MSVC，不需要开发者命令行）
 #
 #   powershell -ExecutionPolicy Bypass -File tools\build.ps1
 #
@@ -145,11 +145,11 @@ foreach ($t in $targets) {
 }
 
 # 主程序（GUI 子系统）
-Write-Step "building diw_overlay.exe"
-$overlay = Join-Path $outDir 'diw_overlay.exe'
+Write-Step "building balance_island.exe"
+$overlay = Join-Path $outDir 'balance_island.exe'
 $clArgs = @()
 $clArgs += $flags
-$clArgs += ('-Fo' + (Join-Path $outDir 'diw_overlay.obj'))
+$clArgs += ('-Fo' + (Join-Path $outDir 'balance_island.obj'))
 $clArgs += ('-Fe' + $overlay)
 $clArgs += 'src/win32/overlay_main.cpp'
 $clArgs += '/link'
@@ -158,7 +158,7 @@ foreach ($lib in $guiLibs) { $clArgs += $lib }
 & $cl @clArgs 2>&1 | ForEach-Object {
     if ($_ -match 'error|warning') { Write-Host "  $_" -ForegroundColor Yellow }
 }
-if ($LASTEXITCODE -ne 0) { $failed += 'diw_overlay' }
+if ($LASTEXITCODE -ne 0) { $failed += 'balance_island' }
 
 if ($failed.Count -gt 0) {
     Fail ("编译失败：" + ($failed -join ', '))
@@ -191,4 +191,4 @@ Write-Ok "全部测试通过"
 Write-Host ""
 Write-Host ""
 Write-Host "可执行文件：$overlay" -ForegroundColor Cyan
-Write-Host "运行：     .\build\cpp\diw_overlay.exe" -ForegroundColor Cyan
+Write-Host "运行：     .\build\cpp\balance_island.exe" -ForegroundColor Cyan

@@ -1,14 +1,14 @@
-// DynamicIsland-Win / 规则持久化与热加载（Win32）
+// balance_island / 规则持久化与热加载（Win32）
 //
-// 配置文件位置：%APPDATA%\DynamicIsland-Win\rules.json
+// 配置文件位置：%APPDATA%\balance_island\rules.json
 //   - 放在 APPDATA 而不是程序目录：程序目录可能只读（Program Files），
 //     而且用户升级覆盖 exe 时不该把配置一起冲掉。
 //   - 文件不存在时自动写一份带说明的默认配置，用户改坏了也能重新生成。
 //
 // 热加载：每 500ms 查一次 mtime，变了就重读。不需要重启程序，也不需要 IPC。
 // 解析失败时**保留上一份可用配置**，只记录错误 —— 用户写错一个逗号不该让胶囊停摆。
-#ifndef DIW_SRC_WIN32_RULES_IO_HPP
-#define DIW_SRC_WIN32_RULES_IO_HPP
+#ifndef BI_SRC_WIN32_RULES_IO_HPP
+#define BI_SRC_WIN32_RULES_IO_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -26,7 +26,7 @@
 
 #include "rules.hpp"
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 class RulesStore {
@@ -36,14 +36,16 @@ public:
         PWSTR appdata = nullptr;
         if (SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata)) &&
             appdata != nullptr) {
-            dir_ = std::wstring(appdata) + L"\\DynamicIsland-Win";
+            dir_ = std::wstring(appdata) + L"\\balance_island";
             ::CoTaskMemFree(appdata);
         } else {
             dir_ = exe_dir;
         }
         ::CreateDirectoryW(dir_.c_str(), nullptr);  // 已存在会返回 ERROR_ALREADY_EXISTS，忽略
         path_ = dir_ + L"\\rules.json";
-
+        // 更名迁移必须在 EnsureFile() 之前：否则新目录会先生成一份默认配置，
+        // 用户攒过的外观与开关就被"看起来还在、其实已回退"地覆盖了。
+        MigrateLegacyConfig();
         EnsureFile();
         Load();
     }
@@ -79,6 +81,22 @@ public:
     }
 
 private:
+    // v0.2.0 产品更名后配置目录换了名字。新目录首次启动时把旧配置**复制**过来；
+    // 只复制不删除，旧目录留作回退，用户可以随时手动比对。
+    void MigrateLegacyConfig() {
+        if (::GetFileAttributesW(path_.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+        PWSTR appdata = nullptr;
+        if (!SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata)) ||
+            appdata == nullptr) {
+            return;
+        }
+        const std::wstring legacy = std::wstring(appdata) + L"\\DynamicIsland-Win\\rules.json";  // BI_LEGACY_
+        ::CoTaskMemFree(appdata);
+        if (::GetFileAttributesW(legacy.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            ::CopyFileW(legacy.c_str(), path_.c_str(), TRUE);  // TRUE = 不覆盖已有文件
+        }
+    }
+
     // 先写 `<path>.tmp`，成功后再替换目标文件。替换失败（如另一个进程占着）
     // 时删掉临时文件，保持原文件不动 —— 最坏情况是这次没保存成功，而不是丢配置。
     static bool WriteAtomic(const std::wstring& path, const std::string& text) {
@@ -156,6 +174,6 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_RULES_IO_HPP
+#endif  // BI_SRC_WIN32_RULES_IO_HPP

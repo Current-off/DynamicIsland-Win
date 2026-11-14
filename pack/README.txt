@@ -1,20 +1,20 @@
-DynamicIsland-Win
+balance_island
 =================
 
-Windows 顶部的灵动岛：媒体、通知、剪贴板、下载、电量、音量、编码 Agent、
+Windows 顶部的平衡岛 balance_island：媒体、通知、剪贴板、下载、电量、音量、编码 Agent、
 浏览器、会议、编辑器 —— 一件在发生的事，一条胶囊。
 
 安装
 ----
 1. 解压整个 zip（不要只把 exe 拷出来，安装脚本要跟它在一起）。
-2. 双击 install.cmd。装到 %LOCALAPPDATA%\DynamicIsland-Win，并设置开机自启。
+2. 双击 install.cmd。装到 %LOCALAPPDATA%\balance_island，并设置开机自启。
    - 只装不自启：install.cmd -NoAutostart
 3. 卸载：双击 uninstall.cmd（配置会保留）。
 
 
 !!! 首次运行会被 Windows 拦截，这是正常的 !!!
 ------------------------------------------------
-本程序没有代码签名证书。首次运行 diw_overlay.exe 时，Windows 会弹：
+本程序没有代码签名证书。首次运行 balance_island.exe 时，Windows 会弹：
 
     "Windows 已保护你的电脑 / Windows protected your PC"
     发布者：未知发布者
@@ -33,14 +33,14 @@ tools\build.ps1（一条命令，不需要装 CMake 或 IDE）。
 
 配置文件
 --------
-%APPDATA%\DynamicIsland-Win\rules.json
+%APPDATA%\balance_island\rules.json
 首次运行自动生成。改坏了删掉即可恢复默认；卸载默认保留它。
 
 
 常见问题
 --------
 Q: 双击后什么也没发生？
-A: 它可能已经在运行（单实例）。看托盘；或在任务管理器里结束 diw_overlay 再启动。
+A: 它可能已经在运行（单实例）。看托盘；或在任务管理器里结束 balance_island 再启动。
 
 Q: 顶部没看到胶囊？
 A: 没有活动时它会隐藏/休眠。放一首歌、复制一段文字，或双击 exe 把它叫出来。

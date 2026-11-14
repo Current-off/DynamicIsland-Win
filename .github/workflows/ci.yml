@@ -33,7 +33,7 @@ jobs:
       - name: Startup + offscreen render smoke
         shell: pwsh
         run: |
-          $exe = "build/cpp/diw_overlay.exe"
+          $exe = "build/cpp/balance_island.exe"
           $snap = "build/snap_ci.png"
           $p = Start-Process -FilePath $exe -PassThru -Wait -ArgumentList @(
             "--script", "--no-hud", "--opacity=2", "--anchor=1",
@@ -51,7 +51,7 @@ jobs:
       - name: Fail on crash log
         shell: pwsh
         run: |
-          $crash = "build/cpp/diw-overlay.crash.log"
+          $crash = "build/cpp/balance-island.crash.log"
           if (Test-Path $crash) {
             Get-Content $crash
             throw "crash log produced during CI smoke run"
@@ -60,9 +60,9 @@ jobs:
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: diw_overlay-${{ github.sha }}
+          name: balance_island-${{ github.sha }}
           path: |
-            build/cpp/diw_overlay.exe
+            build/cpp/balance_island.exe
             build/cpp/*_tests.exe
             build/snap_ci.png
             build/ci_smoke.log

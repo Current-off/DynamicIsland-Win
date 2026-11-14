@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 分层窗口绘制表面（C++17 + GDI+）
+// balance_island / 分层窗口绘制表面（C++17 + GDI+）
 //
 // 职责边界：只负责「一块 32bpp 位图 + 提交到桌面」这件事，不含任何业务语义。
 // 关键工程点：
@@ -7,8 +7,8 @@
 //   2. 分层窗口必须在 ShowWindow 之前完成第一次 UpdateLayeredWindow，
 //      否则会闪出一块纯黑矩形。
 //   3. 本文件是 Windows 相关代码的唯一落点；核心域仍保持平台无关。
-#ifndef DIW_SRC_WIN32_LAYERED_SURFACE_HPP
-#define DIW_SRC_WIN32_LAYERED_SURFACE_HPP
+#ifndef BI_SRC_WIN32_LAYERED_SURFACE_HPP
+#define BI_SRC_WIN32_LAYERED_SURFACE_HPP
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -29,7 +29,7 @@
 #include <string>
 #include <vector>
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 // GDI+ 生命周期。必须是进程内唯一且存活时间覆盖所有绘图对象。
@@ -313,6 +313,6 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_WIN32_LAYERED_SURFACE_HPP
+#endif  // BI_SRC_WIN32_LAYERED_SURFACE_HPP

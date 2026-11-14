@@ -74,8 +74,8 @@ echo "=== compile browser probe (本机真实浏览器 -> 采集结果) ==="
 cl.exe "${FLAGS[@]}" -Fo"build/cpp/" -Fe"build/cpp/browser_probe.exe" \
   probes/browser_probe.cpp /link /SUBSYSTEM:CONSOLE user32.lib shell32.lib ole32.lib
 
-echo "=== compile diw_overlay (桌面胶囊，GUI 子系统) ==="
-cl.exe "${FLAGS[@]}" -Fo"build/cpp/" -Fe"build/cpp/diw_overlay.exe" \
+echo "=== compile balance_island (桌面胶囊，GUI 子系统) ==="
+cl.exe "${FLAGS[@]}" -Fo"build/cpp/" -Fe"build/cpp/balance_island.exe" \
   src/win32/overlay_main.cpp \
   /link /SUBSYSTEM:WINDOWS "${GUI_LIBS[@]}"
 
@@ -143,4 +143,4 @@ echo "=== run ==="
 ./build/cpp/hanzi_probe.exe
 ./build/cpp/cache_probe.exe
 echo "C++ BUILD+TEST: PASS"
-echo "可执行程序: build/cpp/diw_overlay.exe"
+echo "可执行程序: build/cpp/balance_island.exe"

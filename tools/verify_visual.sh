@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-EXE="build/cpp/diw_overlay.exe"
+EXE="build/cpp/balance_island.exe"
 if [ ! -f "$EXE" ]; then
   echo "=== 未找到 $EXE，先构建 ==="
   bash tools/build_cpp_msvc.sh

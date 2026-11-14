@@ -2,7 +2,7 @@
 // 编辑器「此刻在改哪个文件」的纯数据与纯函数。
 //
 // 为什么单独一层：这一块**唯一**的数据源是窗口标题，而窗口标题是人写的字符串 ——
-// 「renderer.hpp — DynamicIsland-Win — Trae CN」这句话里，哪一段是文件、哪一段是
+// 「renderer.hpp — balance_island — Trae CN」这句话里，哪一段是文件、哪一段是
 // 项目、哪一段是应用，全靠猜规则。规则猜错的表现是「岛上显示了一个半截路径」，
 // 而这种错必须能被单测钉住，否则每加一个编辑器就要重新肉眼验证一遍。
 //
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace diw {
+namespace bi {
 
 struct EditorState {
     std::string id;         // editor:<brand>
@@ -212,7 +212,7 @@ inline std::string LanguageOf(const std::string& file) {
 // 从窗口标题里把「文件 / 项目 / 应用」拆出来。
 //
 // 输入形如：
-//   renderer.hpp — DynamicIsland-Win — Trae CN        （VS Code 系，有工作区）
+//   renderer.hpp — balance_island — Trae CN        （VS Code 系，有工作区）
 //   ● app.ts — web — Cursor                           （有未保存修改）
 //   README.md - Notepad++                             （无工作区）
 //   main.cpp – order-service – IntelliJ IDEA 2024.1   （JetBrains，带版本号）
@@ -310,4 +310,4 @@ inline bool BuildEditorState(const std::string& exe_stem, const std::string& tit
     return true;
 }
 
-}  // namespace diw
+}  // namespace bi

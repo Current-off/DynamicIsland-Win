@@ -1,6 +1,6 @@
-﻿# 独立安装器（随 zip 发布，不依赖仓库结构）
+# 独立安装器（随 zip 发布，不依赖仓库结构）
 #
-#   install.cmd            → 装到 %LOCALAPPDATA%\DynamicIsland-Win 并开机自启
+#   install.cmd            → 装到 %LOCALAPPDATA%\balance_island 并开机自启
 #   install.cmd -NoAutostart → 只装，不自启
 #   install.cmd -Uninstall   → 卸载（保留配置）
 #
@@ -16,22 +16,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $srcDir = $PSScriptRoot
-$exeSrc = Join-Path $srcDir 'diw_overlay.exe'
-$installDir = Join-Path $env:LOCALAPPDATA 'DynamicIsland-Win'
-$exePath = Join-Path $installDir 'diw_overlay.exe'
-$configDir = Join-Path $env:APPDATA 'DynamicIsland-Win'
+$exeSrc = Join-Path $srcDir 'balance_island.exe'
+$installDir = Join-Path $env:LOCALAPPDATA 'balance_island'
+$exePath = Join-Path $installDir 'balance_island.exe'
+$configDir = Join-Path $env:APPDATA 'balance_island'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$runName = 'DynamicIslandWin'
+$runName = 'BalanceIsland'
 
 function Info($msg) { Write-Host $msg }
 function Fail($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 
 # 安装目录必须是这个后缀，避免路径算错时误删别的东西。
-if (-not $installDir.EndsWith('DynamicIsland-Win')) { Fail "安装目录异常：$installDir" }
+if (-not $installDir.EndsWith('balance_island')) { Fail "安装目录异常：$installDir" }
 
 if ($Uninstall) {
     Info '正在卸载…'
-    Get-Process -Name 'diw_overlay' -ErrorAction SilentlyContinue |
+    Get-Process -Name 'balance_island' -ErrorAction SilentlyContinue |
         ForEach-Object { $_ | Stop-Process -Force -ErrorAction SilentlyContinue }
 
     if (Test-Path $runKey) {
@@ -43,8 +43,8 @@ if ($Uninstall) {
     }
 
     $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    foreach ($lnk in @((Join-Path $startMenu 'DynamicIsland-Win.lnk'),
-                       (Join-Path ([Environment]::GetFolderPath('Desktop')) 'DynamicIsland-Win.lnk'))) {
+    foreach ($lnk in @((Join-Path $startMenu 'balance_island.lnk'),
+                       (Join-Path ([Environment]::GetFolderPath('Desktop')) 'balance_island.lnk'))) {
         if (Test-Path $lnk) { Remove-Item $lnk -Force; Info "  已删除快捷方式 $(Split-Path -Leaf $lnk)" }
     }
 
@@ -67,7 +67,7 @@ if ($Uninstall) {
 if (-not (Test-Path $exeSrc)) {
     # 这条报错以前只有一句"找不到 exe"，用户看到它只能干瞪眼。
     # 现在把目录内容列出来 —— "缺了什么"和"被删了"是两件完全不同的事。
-    Write-Host 'ERROR: 当前目录找不到 diw_overlay.exe' -ForegroundColor Red
+    Write-Host 'ERROR: 当前目录找不到 balance_island.exe' -ForegroundColor Red
     Write-Host "  期望路径：$exeSrc"
     Write-Host '  当前目录实际内容：'
     Get-ChildItem $srcDir -ErrorAction SilentlyContinue | ForEach-Object {
@@ -75,7 +75,7 @@ if (-not (Test-Path $exeSrc)) {
     }
     Write-Host ''
     Write-Host '  三个常见原因，按概率排：'
-    Write-Host '   1) 杀毒软件把 diw_overlay.exe 隔离了（未签名程序从压缩包解出时很常见）'
+    Write-Host '   1) 杀毒软件把 balance_island.exe 隔离了（未签名程序从压缩包解出时很常见）'
     Write-Host '      处理：Windows 安全中心 → 病毒和威胁防护 → 保护历史记录 → 找到它 → 允许/还原；'
     Write-Host '            或先把解压目录加入"排除项"，再重新解压。'
     Write-Host '   2) 解压时只拿了 install.cmd 等文本文件（exe 必须和它们在同一层目录）'
@@ -89,21 +89,21 @@ Info "安装到 $installDir"
 New-Item -ItemType Directory -Force $installDir | Out-Null
 
 # 覆盖前先结束正在跑的实例，否则复制会因文件占用失败。
-Get-Process -Name 'diw_overlay' -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Process -Name 'balance_island' -ErrorAction SilentlyContinue | ForEach-Object {
     $_ | Stop-Process -Force -ErrorAction SilentlyContinue
     Info "  已结束正在运行的实例（PID $($_.Id)）"
     Start-Sleep -Milliseconds 300
 }
 
 Copy-Item $exeSrc $exePath -Force
-Info '  已复制 diw_overlay.exe'
+Info '  已复制 balance_island.exe'
 
-$lnkPath = Join-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') 'DynamicIsland-Win.lnk'
+$lnkPath = Join-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') 'balance_island.lnk'
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath = $exePath
 $lnk.WorkingDirectory = $installDir
-$lnk.Description = 'DynamicIsland-Win'
+$lnk.Description = 'balance_island'
 $lnk.Save()
 Info '  已创建开始菜单快捷方式'
 

@@ -1,6 +1,6 @@
 # IPC 协议 v1
 
-管道：`\\.\pipe\DynamicIslandWin-v1`（per-user ACL，无 TCP 端口、无 LAN 端点）。
+管道：`\\.\pipe\BalanceIsland-v1`（per-user ACL，无 TCP 端口、无 LAN 端点）。
 格式：UTF-8 JSON lines，一条消息一行，键顺序固定、无多余空白。
 
 ## 消息字段
@@ -99,7 +99,7 @@ tools\send-activity.ps1 -Title "构建通过" -Kind "bridge.ci" -Content '{"body
 tools\send-activity.ps1 -End -Id "cli:demo"
 ```
 
-其他语言照同一份协议写三行即可：连 `\\.\pipe\DynamicIslandWin-v1`、
+其他语言照同一份协议写三行即可：连 `\\.\pipe\BalanceIsland-v1`、
 写一行 JSON（UTF-8，`\n` 结尾）、读到 EOF 拿确认。
 
 ### 实测

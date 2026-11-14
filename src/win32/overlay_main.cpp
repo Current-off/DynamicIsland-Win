@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 桌面胶囊可执行程序入口（Win32 + GDI+，GUI 子系统）
+// balance_island / 桌面胶囊可执行程序入口（Win32 + GDI+，GUI 子系统）
 //
 // 这一层只做四件事：
 //   1. 把采集到的系统状态交给核心域映射成实时活动（core/live_mapping.hpp）
@@ -8,13 +8,13 @@
 // 所有业务判定都在 core/，渲染层不含任何调度逻辑。
 //
 // 运行方式：
-//   diw_overlay.exe                        正常跑：真实系统事件 + 规则过滤
-//   diw_overlay.exe --duration=20000       20 秒后自动退出（便于脚本化验证）
-//   diw_overlay.exe --snapshot=out.png --snapshot-at=4000
-//   diw_overlay.exe --grab=desktop.png --snapshot-at=4000   从屏幕 DC 抓取，证明窗口在桌面上
-//   diw_overlay.exe --settings             打开设置窗口
-//   diw_overlay.exe --settings --shot=ui.png   打开设置窗口并截图后关闭（视觉回归用）
-//   diw_overlay.exe --script               回到内置剧本（仅用于视觉回归）
+//   balance_island.exe                        正常跑：真实系统事件 + 规则过滤
+//   balance_island.exe --duration=20000       20 秒后自动退出（便于脚本化验证）
+//   balance_island.exe --snapshot=out.png --snapshot-at=4000
+//   balance_island.exe --grab=desktop.png --snapshot-at=4000   从屏幕 DC 抓取，证明窗口在桌面上
+//   balance_island.exe --settings             打开设置窗口
+//   balance_island.exe --settings --shot=ui.png   打开设置窗口并截图后关闭（视觉回归用）
+//   balance_island.exe --script               回到内置剧本（仅用于视觉回归）
 //   右键胶囊 → 菜单（设置 / 暂停 / 退出）；左键 → 展开收起
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -46,6 +46,7 @@
 
 #include "../core/activity.hpp"
 #include "../core/live_mapping.hpp"
+#include "BalanceRules.hpp"  // 平衡岛范式常量（Ctrl 让路系数等）
 #include "backdrop.hpp"
 #include "layered_surface.hpp"
 #include "hanzi.hpp"
@@ -61,22 +62,22 @@
 
 namespace {
 
-using diw::Activity;
-using diw::ActivityRuntime;
-using diw::CapsuleEvent;
-using diw::CapsuleState;
-using diw::Frame;
-using diw::ScheduledActivity;
-using diw::win32::CapsuleRenderer;
-using diw::win32::CapsuleView;
-using diw::win32::GdiPlusSession;
-using diw::win32::GlassParams;
-using diw::win32::LayeredSurface;
-using diw::win32::Layout;
-using diw::win32::OverviewItem;
-using diw::win32::ParseProgress;
-using diw::win32::Widen;
-using diw::win32::Backdrop;
+using bi::Activity;
+using bi::ActivityRuntime;
+using bi::CapsuleEvent;
+using bi::CapsuleState;
+using bi::Frame;
+using bi::ScheduledActivity;
+using bi::win32::CapsuleRenderer;
+using bi::win32::CapsuleView;
+using bi::win32::GdiPlusSession;
+using bi::win32::GlassParams;
+using bi::win32::LayeredSurface;
+using bi::win32::Layout;
+using bi::win32::OverviewItem;
+using bi::win32::ParseProgress;
+using bi::win32::Widen;
+using bi::win32::Backdrop;
 
 using Clock = std::chrono::steady_clock;
 
@@ -149,7 +150,7 @@ bool g_press_in_button = false;
 
 // 窗口线程与采集线程之间唯一的共享入口：WM_DEVICECHANGE 是异步广播，
 // 收到时直接推进采集层的设备序号，主循环下一帧就能读到。
-diw::live::LiveSources* g_sources = nullptr;
+bi::live::LiveSources* g_sources = nullptr;
 
 constexpr int kMenuSettings = 3001;
 constexpr int kMenuPause = 3002;
@@ -251,7 +252,7 @@ struct Options {
 
 Options ParseArgs() {
     Options opt;
-    opt.log_path = ExeDirectory() + "\\diw-overlay.log";
+    opt.log_path = ExeDirectory() + "\\balance-island.log";
     int argc = 0;
     LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
     if (argv == nullptr) return opt;
@@ -537,7 +538,7 @@ bool LaunchAppImpl(const std::string& target, bool dry_run, std::string* resolve
             proc.resize(proc.size() - 4);
         }
         std::wstring running;
-        if (diw::live::RunningExePathByProcessName(proc, &running) &&
+        if (bi::live::RunningExePathByProcessName(proc, &running) &&
             ::GetFileAttributesW(running.c_str()) != INVALID_FILE_ATTRIBUTES) {
             // 有些应用（腾讯视频这类 WebView 壳）在 SMTC 里报的是宿主进程
             // msedgewebview2.exe —— 把用户「打开」到这个进程毫无意义，
@@ -562,7 +563,7 @@ bool LaunchAppImpl(const std::string& target, bool dry_run, std::string* resolve
     // ② 隐式 AUMID：系统为未打包应用合成的 {GUID}\相对路径，开始菜单里
     //    往往根本没有对应 .lnk。用已知文件夹 GUID 还原出真实 exe 再开。
     std::wstring exe;
-    if (diw::live::ExeFromImplicitAumid(target, &exe) &&
+    if (bi::live::ExeFromImplicitAumid(target, &exe) &&
         ::GetFileAttributesW(exe.c_str()) != INVALID_FILE_ATTRIBUTES) {
         return shell_open(exe);
     }
@@ -589,7 +590,7 @@ bool LaunchAppImpl(const std::string& target, bool dry_run, std::string* resolve
     //    否则会静默失败，表现为「明明 Get-StartApps 里有，就是解析不到」。
     {
         std::wstring appid;
-        if (diw::live::FindAppsFolderAppId(target, &appid)) {
+        if (bi::live::FindAppsFolderAppId(target, &appid)) {
             if (shell_open(std::wstring(L"shell:AppsFolder\\") + appid, true)) return true;
         }
     }
@@ -627,7 +628,7 @@ bool LaunchApp(const std::string& target) { return LaunchAppImpl(target, false, 
 // （它已经在跑了），而是把承载它的那个终端 / 编辑器窗口提到前台。
 //
 // 没有 API 能问「这个会话属于哪个窗口」，所以按窗口标题匹配：
-// 终端标题里几乎总是带着项目目录名（`DynamicIsland-Win — claude`），
+// 终端标题里几乎总是带着项目目录名（`balance_island — claude`），
 // 再叠加一层 provider 关键词，足够区分同时开着的几个终端。
 struct FocusCandidate {
     HWND hwnd = nullptr;
@@ -651,16 +652,16 @@ BOOL CALLBACK FocusCollectProc(HWND hwnd, LPARAM) {
     if (len <= 0) return TRUE;
 
     const std::string narrow = Narrow(title);
-    const std::string lower = diw::AsciiLower(narrow);
+    const std::string lower = bi::AsciiLower(narrow);
     int score = 0;
-    if (!g_focus_project.empty() && diw::ContainsCaseless(lower, diw::AsciiLower(g_focus_project))) {
+    if (!g_focus_project.empty() && bi::ContainsCaseless(lower, bi::AsciiLower(g_focus_project))) {
         score += 4;
     }
     // provider 关键词：Claude Code 的终端标题常带 "claude"，Codex 带 "codex"。
     static const std::pair<const char*, const char*> kHints[] = {
         {"claude", "claude"}, {"codex", "codex"}, {"gemini", "gemini"}, {"workbuddy", "workbuddy"}};
     for (const auto& hint : kHints) {
-        if (g_focus_provider == hint.first && diw::ContainsCaseless(lower, hint.second)) {
+        if (g_focus_provider == hint.first && bi::ContainsCaseless(lower, hint.second)) {
             score += 2;
             break;
         }
@@ -742,7 +743,7 @@ BOOL CALLBACK EditorFocusProc(HWND hwnd, LPARAM param) {
         if (base.size() > 4 && base.compare(base.size() - 4, 4, L".exe") == 0) {
             base.resize(base.size() - 4);
         }
-        match = diw::AsciiLower(Narrow(base)) == diw::AsciiLower(*ctx->exe);
+        match = bi::AsciiLower(Narrow(base)) == bi::AsciiLower(*ctx->exe);
     }
     ::CloseHandle(proc);
     if (match) {
@@ -853,7 +854,7 @@ NOTIFYICONDATAW MakeTrayData(HWND hwnd) {
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = kMsgTray;
     nid.hIcon = ::LoadIconW(nullptr, IDI_APPLICATION);
-    ::lstrcpynW(nid.szTip, L"DynamicIsland-Win（左键/右键打开菜单）",
+    ::lstrcpynW(nid.szTip, L"平衡岛 balance_island · 按住 Ctrl 让路 · 左键/右键菜单",
                 static_cast<int>(std::size(nid.szTip)));
     return nid;
 }
@@ -1309,10 +1310,10 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
             // 繁转简只作用于「播放器给的元数据」：很多老歌的 tag 与歌词都是繁体，
             // 直接显示会和系统其它界面不一致。歌词在拉取时就转了，这里只管标题/歌手。
             if (simplify) {
-                view.title = diw::win32::ToSimplified(view.title);
+                view.title = bi::win32::ToSimplified(view.title);
             }
             view.subtitle = SubtitleOf(kind, json);
-            if (simplify) view.subtitle = diw::win32::ToSimplified(view.subtitle);
+            if (simplify) view.subtitle = bi::win32::ToSimplified(view.subtitle);
             const std::int64_t pos_ms = JsonInt(json, "position_ms");
             const std::int64_t end_ms = JsonInt(json, "end_ms");
             if (end_ms > 0) {
@@ -1399,15 +1400,15 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
             view.agent_footer = foot;
 
             // 清单优先，没清单就画动作时间线 —— 两者都是「干到哪一步」的答案。
-            diw::json::Value root;
-            if (diw::json::Parse(json, root, nullptr)) {
+            bi::json::Value root;
+            if (bi::json::Parse(json, root, nullptr)) {
                 const auto& todos = root.At("todos");
                 if (todos.IsArray() && !todos.items.empty()) {
                     view.agent_rows_are_todos = true;
                     for (const auto& t : todos.items) {
                         if (static_cast<int>(view.agent_rows.size()) >= Layout::kAgentRows) break;
                         const std::string status = t.At("s").AsString();
-                        diw::win32::AgentRow row;
+                        bi::win32::AgentRow row;
                         row.status = status == "completed" ? 2 : (status == "in_progress" ? 1 : 0);
                         row.text = t.At("t").AsString();
                         if (!row.text.empty()) view.agent_rows.push_back(std::move(row));
@@ -1417,7 +1418,7 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
                     for (const auto& item : timeline.items) {
                         if (static_cast<int>(view.agent_rows.size()) >= Layout::kAgentRows) break;
                         if (!item.IsString() || item.text.empty()) continue;
-                        diw::win32::AgentRow row;
+                        bi::win32::AgentRow row;
                         row.status = 2;
                         row.text = item.text;
                         view.agent_rows.push_back(std::move(row));
@@ -1475,16 +1476,16 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
             // 复用它就不必再造一套图片缓存。
             view.cover_path = JsonString(json, "favicon");
             if (simplify) {
-                view.browser_title = diw::win32::ToSimplified(view.browser_title);
-                view.browser_site_label = diw::win32::ToSimplified(view.browser_site_label);
+                view.browser_title = bi::win32::ToSimplified(view.browser_title);
+                view.browser_site_label = bi::win32::ToSimplified(view.browser_site_label);
             }
             if (view.browser_title.empty()) view.browser_title = view.browser_label;
 
-            diw::json::Value root;
-            if (diw::json::Parse(json, root, nullptr)) {
+            bi::json::Value root;
+            if (bi::json::Parse(json, root, nullptr)) {
                 for (const auto& d : root.At("downloads").items) {
                     if (static_cast<int>(view.browser_rows.size()) >= Layout::kBrowserRows) break;
-                    diw::win32::BrowserRow row;
+                    bi::win32::BrowserRow row;
                     row.name = d.At("n").AsString();
                     row.progress = d.At("p").AsDouble(-1.0);
                     if (!(row.progress >= 0.0)) row.progress = -1.0;
@@ -1513,7 +1514,7 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
                     view.browser_rows.clear();
                     const int cap = (std::min)(g_browser_fake_dl, Layout::kBrowserRows);
                     for (int i = 0; i < cap; ++i) {
-                        diw::win32::BrowserRow row;
+                        bi::win32::BrowserRow row;
                         row.name = kFake[i].name;
                         row.progress = kFake[i].p;
                         char buf[48] = {0};
@@ -1552,7 +1553,7 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
             item.kind = s.activity.kind;
             item.title = s.activity.title;
             if (simplify && s.activity.kind.rfind("media", 0) == 0) {
-                item.title = diw::win32::ToSimplified(item.title);  // 一览里也要简体
+                item.title = bi::win32::ToSimplified(item.title);  // 一览里也要简体
             }
             item.subtitle = SubtitleOf(s.activity.kind, sj);
             item.cover_path = JsonString(sj, "cover");
@@ -1591,7 +1592,7 @@ CapsuleView BuildView(const Frame& frame, CapsuleState state, bool bridge_online
                                         Layout::kDetachedMax);
         for (int i = 0; i < slots; ++i) {
             const ScheduledActivity& item = frame.visible[static_cast<std::size_t>(1 + i)];
-            diw::win32::DetachedItem d;
+            bi::win32::DetachedItem d;
             d.kind = item.activity.kind;
             d.provider = JsonString(item.activity.content_json, "provider");
             d.state = JsonString(item.activity.content_json, "state");
@@ -1667,17 +1668,17 @@ int Run() {
     GdiPlusSession gdiplus;
 
     // ---- 规则：先落地配置文件，再读进内存。放在最前面，设置窗口也要用。----
-    diw::win32::RulesStore rules;
+    bi::win32::RulesStore rules;
     rules.Init(ExeDirectoryWide());
     note("rules: " + Narrow(rules.Path()));
 
     // ---- 设置模式：开一个原生窗口，保存后写回配置文件并退出 ----
     if (opt.settings) {
-        diw::RuleConfig updated;
+        bi::RuleConfig updated;
         bool saved = false;
         bool shot_done = false;
         std::string selftest_note;
-        diw::win32::ShowSettings(rules.Config(), rules.Path(), Widen(opt.settings_shot), &updated,
+        bi::win32::ShowSettings(rules.Config(), rules.Path(), Widen(opt.settings_shot), &updated,
                                  &saved, &shot_done, opt.settings_selftest, &selftest_note);
 
         if (opt.settings_selftest) {
@@ -1713,7 +1714,7 @@ int Run() {
     wc.style = CS_DBLCLKS;  // 没有它收不到 WM_LBUTTONDBLCLK
     wc.lpfnWndProc = OverlayWndProc;
     wc.hInstance = instance;
-    wc.lpszClassName = L"DIW_OverlayWindow";
+    wc.lpszClassName = L"BI_OverlayWindow";
     if (::RegisterClassExW(&wc) == 0) {
         note("ERROR: RegisterClassExW failed");
         return 1;
@@ -1722,9 +1723,9 @@ int Run() {
     // 单实例：否则两个进程各画一个胶囊，像素级重叠，动画不同步，
     // 而且两套采集线程都在读剪贴板/通知。实测同时跑两个实例确认过。
     // 第二个进程不静默退出，而是通知已有实例现身 —— 见 g_presence。
-    ::CreateMutexW(nullptr, FALSE, L"DynamicIsland-Win-Overlay-SingleInstance");
+    ::CreateMutexW(nullptr, FALSE, L"BalanceIsland-Overlay-SingleInstance");
     if (::GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND existing = ::FindWindowW(L"DIW_OverlayWindow", nullptr)) {
+        if (HWND existing = ::FindWindowW(L"BI_OverlayWindow", nullptr)) {
             ::PostMessageW(existing, kMsgPresence, 0, 0);
             note("already running: presence ping sent, this process exits");
         } else {
@@ -1734,7 +1735,7 @@ int Run() {
     }
 
     HWND hwnd = ::CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                  wc.lpszClassName, L"DynamicIsland-Win", WS_POPUP, 0, 0, 10, 10, nullptr,
+                                  wc.lpszClassName, L"balance_island", WS_POPUP, 0, 0, 10, 10, nullptr,
                                   nullptr, instance, nullptr);
     if (hwnd == nullptr) {
         note("ERROR: CreateWindowExW failed");
@@ -1893,16 +1894,16 @@ int Run() {
     // ---- 外部推送上岛（命名管道）----
     // 一次连接一条消息；解码在工作线程，主循环只从队列取现成的请求。
     // 这样别的程序（CI、下载器、脚本、IDE）不必弹自己的通知，直接上岛。
-    diw::win32::IpcServer ipc;
+    bi::win32::IpcServer ipc;
     ipc.SetLogger([&note](const std::string& line) { note(line); });
     ipc.Start();
-    note("ipc: listening on \\\\.\\pipe\\DynamicIslandWin-v1");
+    note("ipc: listening on \\\\.\\pipe\\BalanceIsland-v1");
 
     Demo demo;
     Animation anim;
 
     // 在线歌词：独立 worker 线程拉 LRCLIB，主线程只投歌名与读结果。
-    diw::win32::LyricFetcher lyric_fetcher;
+    bi::win32::LyricFetcher lyric_fetcher;
     // 配置里指定的歌词代理（空 = 自动探测环境变量 / Internet 选项）。
     lyric_fetcher.SetProxy(Widen(rules.Config().lyrics_proxy));
     lyric_fetcher.SetSimplify(rules.Config().simplify_chinese);
@@ -1925,7 +1926,7 @@ int Run() {
     std::int64_t seek_hold_until_ms = 0;
 
     // 本地 LRC fixture：用真实 API 拉下来的数据存盘，做确定性歌词回归。
-    std::vector<diw::win32::LyricLine> lyric_fixture;
+    std::vector<bi::win32::LyricLine> lyric_fixture;
     if (!opt.lyric_lrc_path.empty()) {
         std::ifstream in(opt.lyric_lrc_path, std::ios::in | std::ios::binary);
         if (in) {
@@ -1934,9 +1935,9 @@ int Run() {
             // fixture 也要走同一套繁转简，否则「回归里是繁体、真实链路是简体」
             std::string lrc_text = buf.str();
             if (rules.Config().simplify_chinese) {
-                lrc_text = diw::win32::ToSimplified(lrc_text);
+                lrc_text = bi::win32::ToSimplified(lrc_text);
             }
-            lyric_fixture = diw::win32::ParseLrc(lrc_text);
+            lyric_fixture = bi::win32::ParseLrc(lrc_text);
         }
         note("lyric fixture: " + std::to_string(lyric_fixture.size()) + " lines from " +
              opt.lyric_lrc_path);
@@ -1961,8 +1962,8 @@ int Run() {
     int glass_canvas_h = 0;
 
     // 真实数据采集：跑在独立工作线程，渲染主线程只读快照。
-    diw::live::LiveSources sources;
-    diw::LiveBaselines baselines;
+    bi::live::LiveSources sources;
+    bi::LiveBaselines baselines;
     std::unordered_set<std::string> persistent_ids;
     std::string last_live_log;
     std::string last_block_log;
@@ -2028,7 +2029,7 @@ int Run() {
             note("agent: watching .claude / .workbuddy / .codex / .gemini / .pi / .zcode / Cursor "
                  "(max=" + std::to_string(rules.Config().agent_max) +
                  ", idle=" + std::to_string(rules.Config().agent_idle_sec) + "s, sqlite=" +
-                 (diw::win32::SqliteLite::ApiReady() ? "winsqlite3" : "unavailable") + ")");
+                 (bi::win32::SqliteLite::ApiReady() ? "winsqlite3" : "unavailable") + ")");
         }
     } else {
         note("script mode: 使用内置剧本（仅用于视觉回归与演示）");
@@ -2051,6 +2052,10 @@ int Run() {
     std::int64_t last_interaction_ms = 0;
     HWND last_foreground = nullptr;  // 上一帧的前台窗口，用来检测「打开/切换了新界面」
 
+    // 平衡岛范式 §4「让路」：按住 Ctrl 时窗口鼠标穿透并降透明，
+    // 把「是否遮挡」的决定权交回用户，而不是让用户去设置里翻开关。
+    bool yield_active = false;
+
     while (!g_quit) {
         MSG msg;
         while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -2062,6 +2067,24 @@ int Run() {
             ::DispatchMessageW(&msg);
         }
         if (g_quit) break;
+
+        // ---- 让路（docs/PARADIGM.md §4）----
+        // GetAsyncKeyState 读的是**全局物理键状态**：窗口穿透、失去焦点之后
+        // 依然能检测到 Ctrl 松开，这正是选它而不是 WM_KEYDOWN 的原因
+        //（WM_KEYDOWN 在穿透后就再也收不到了，会让岛卡在让路态）。
+        const bool want_yield = (::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (want_yield != yield_active) {
+            yield_active = want_yield;
+            const LONG ex = ::GetWindowLongW(hwnd, GWL_EXSTYLE);
+            const LONG next = yield_active
+                                  ? (ex | static_cast<LONG>(WS_EX_TRANSPARENT))
+                                  : (ex & ~static_cast<LONG>(WS_EX_TRANSPARENT));
+            ::SetWindowLongW(hwnd, GWL_EXSTYLE, next);
+            // SWP_FRAMECHANGED 才会让扩展样式真正生效（SO 高票答案的坑）
+            ::SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            note(yield_active ? "balance: yield on (Ctrl held)" : "balance: yield off");
+        }
 
         const auto now = Clock::now();
         const double dt = std::chrono::duration<double>(now - last).count();
@@ -2139,9 +2162,9 @@ int Run() {
                      "s] pause=" + (paused ? "off" : "30min"));
             }
             if (cmd == kMenuSettings) {
-                diw::RuleConfig updated;
+                bi::RuleConfig updated;
                 bool saved = false;
-                diw::win32::ShowSettings(rules.Config(), rules.Path(), L"", &updated, &saved, nullptr);
+                bi::win32::ShowSettings(rules.Config(), rules.Path(), L"", &updated, &saved, nullptr);
                 if (saved) {
                     note(std::string("rules saved: ") + (rules.Save(updated) ? "ok" : rules.LastError()));
                 }
@@ -2164,8 +2187,8 @@ int Run() {
         } else {
             // ── 真实模式：系统状态 → 规则过滤 → 实时活动 → 核心域 ──
             const auto snap = sources.Get();
-            const diw::LiveActivities built =
-                diw::BuildActivities(snap, now_ms, MinuteOfDay(), baselines, rules.Config());
+            const bi::LiveActivities built =
+                bi::BuildActivities(snap, now_ms, MinuteOfDay(), baselines, rules.Config());
             baselines = built.next;
             blocked_shown = static_cast<int>(built.blocked.size());
 
@@ -2216,9 +2239,9 @@ int Run() {
                     //      岛上不该停在上一次那段文本上。
                     // 情况 2 是实测抓到的致命 bug：固定 id 的事件在同一进程里
                     // 只提示第一次，第二次起完全静默。
-                    const diw::Activity* existing = demo.runtime->Store().Get(a.id);
+                    const bi::Activity* existing = demo.runtime->Store().Get(a.id);
                     const bool already_stale =
-                        existing != nullptr && existing->state == diw::ActivityState::Stale;
+                        existing != nullptr && existing->state == bi::ActivityState::Stale;
                     const bool content_changed =
                         existing != nullptr &&
                         (existing->title != a.title || existing->content_json != a.content_json);
@@ -2319,8 +2342,8 @@ int Run() {
         auto live_count = [&]() {
             int n = 0;
             for (const auto& a : demo.runtime->Store().All()) {
-                if (a.state == diw::ActivityState::Ended ||
-                    a.state == diw::ActivityState::Dismissed) {
+                if (a.state == bi::ActivityState::Ended ||
+                    a.state == bi::ActivityState::Dismissed) {
                     continue;
                 }
                 ++n;
@@ -2725,10 +2748,10 @@ int Run() {
             sources.ClearSuppressedMedia();
             note("[t=+" + std::to_string(elapsed).substr(0, 5) +
                  "s] presence: cleared dismissed (hidden) items");
-            diw::Activity hint;
+            bi::Activity hint;
             hint.id = "live-presence";
             hint.kind = "presence";
-            hint.title = "灵动岛正在运行";
+            hint.title = "平衡岛正在运行";
             hint.content_json = "{\"body\":\"左键展开 · 右键可设置或退出\"}";
             hint.relevance_score = 95.0;
             hint.created_at_ms = now_ms;
@@ -2745,16 +2768,16 @@ int Run() {
         }
 
         // 外部推送：先落地，再让 Tick 把它算进这一帧 —— 否则会白等一帧才显示。
-        std::vector<diw::ipc::Request> ipc_requests;
+        std::vector<bi::ipc::Request> ipc_requests;
         ipc.TakeAll(&ipc_requests);
         for (const auto& request : ipc_requests) {
-            if (request.type == diw::ipc::Request::Type::End) {
+            if (request.type == bi::ipc::Request::Type::End) {
                 demo.runtime->EndActivity(request.activity.id);
                 note("[t=+" + std::to_string(elapsed).substr(0, 5) + "s] [ipc] -" +
                      request.activity.id);
                 continue;
             }
-            diw::Activity incoming = request.activity;
+            bi::Activity incoming = request.activity;
             if (incoming.created_at_ms == 0) incoming.created_at_ms = now_ms;
             // 没给过期时间就按 8 秒算：外部推送绝大多数是「通知型」事件，
             // 不设上限它会永远占着主位（Activity 的 stale 语义就是干这个的）。
@@ -2878,9 +2901,9 @@ int Run() {
                                          ? std::string()
                                          : LeadOf(frame, demo.expand_id)->content_json,
                                      "position_ms"));
-                const std::vector<diw::win32::LyricLine> lines =
+                const std::vector<bi::win32::LyricLine> lines =
                     has_fixture ? lyric_fixture : lyric_fetcher.Lines();
-                const auto triple = diw::win32::SelectLyricLines(lines, pos_ms);
+                const auto triple = bi::win32::SelectLyricLines(lines, pos_ms);
                 lyric_prev_cache = triple.prev;
                 lyric_cur_cache = triple.cur;
                 lyric_next_cache = triple.next;
@@ -2965,6 +2988,10 @@ int Run() {
             drawn.alpha = anim.alpha * (view.alive_dot
                                             ? Layout::kSleepBarAlpha * alive_breath
                                             : (view.sleep_bar ? Layout::kSleepBarAlpha : 1.0f));
+            // 让路时整体降透明，与鼠标穿透一起构成「不挡住背后内容」。
+            if (yield_active) {
+                drawn.alpha *= static_cast<float>(bi::balance::kBalanceYieldOpacity);
+            }
 
             // 命中几何用「本帧真正画出来的」胶囊尺寸，和 renderer 同源函数，
             // 保证按钮画在哪就能点在哪。窗口消息与主循环同线程，无需加锁。
@@ -2990,7 +3017,7 @@ int Run() {
                 const Gdiplus::RectF pill(pill_xy, pill_xy,
                                           static_cast<float>(drawn.content_w * scale),
                                           static_cast<float>(drawn.content_h * scale));
-                const auto areas = diw::win32::ExpandedHitAreas(pill, static_cast<float>(scale));
+                const auto areas = bi::win32::ExpandedHitAreas(pill, static_cast<float>(scale));
                 g_hit.close = ToBox(areas.close);
                 g_hit.play = ToBox(areas.play);
                 g_hit.tp_back = ToBox(areas.tp_back);
@@ -3034,7 +3061,17 @@ int Run() {
                 // 好过周期性冻结。
                 const std::int64_t glass_interval = static_cast<std::int64_t>(
                     std::clamp(2000.0 + glass_cost_ms * 12.0, 2000.0, 8000.0));
-                const bool need_refresh = !need_epoch && now_ms - glass_last_ms >= glass_interval;
+                const bool refresh_due = !need_epoch && now_ms - glass_last_ms >= glass_interval;
+                // 静止桌面不必重抓：先用 32×8 缩略采样算内容指纹，
+                // 没变就跳过 2.3M 像素 BitBlt + 降采样 + 3 趟模糊
+                //（issue #1 报告「桌面几乎没变却反复全屏抓屏」那条；
+                //  同类项目 NotchPeninsula 也用内容哈希做到静止零开销）。
+                const bool need_refresh =
+                    refresh_due && glass_refresh.ContentChanged(glass_x, glass_y, glass_w, glass_h);
+                if (refresh_due && !need_refresh) {
+                    glass_last_ms = now_ms;  // 没抓也要推进计时，否则每帧都会探测
+                    note("glass: skipped (unchanged desktop)");
+                }
                 if (need_epoch || need_refresh) {
                     const auto glass_t0 = Clock::now();
                     // 修补矩形按「当前实际窗口」算：可见期间刷新时，胶囊自己
@@ -3300,7 +3337,7 @@ void WriteCrashDump(EXCEPTION_POINTERS* info, const std::wstring& path) {
 }
 
 void NoteFatal(const char* text) {
-    std::ofstream f(ExeDirectory() + "\\diw-overlay.crash.log",
+    std::ofstream f(ExeDirectory() + "\\balance-island.crash.log",
                     std::ios::out | std::ios::app | std::ios::binary);
     if (!f) return;
     f << "===== crash " << std::time(nullptr) << " =====\n" << text << "\n";
@@ -3315,7 +3352,7 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
     _snprintf_s(line, sizeof(line), _TRUNCATE, "FATAL(hard): code=0x%08lX (%s) addr=%p",
                 static_cast<unsigned long>(code), ExceptionCodeName(code), address);
     NoteFatal(line);
-    WriteCrashDump(info, ExeDirectoryWide() + L"\\diw-overlay.crash.dmp");
+    WriteCrashDump(info, ExeDirectoryWide() + L"\\balance-island.crash.dmp");
     // 已经留证，直接终止；不要落到 Windows 错误报告对话框上。
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -3329,13 +3366,13 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     } catch (const std::exception& e) {
         // 追加而不是截断：崩溃前的那几行日志是唯一线索，
         // 用 trunc 打开等于自己把现场擦掉。
-        std::ofstream f(ExeDirectory() + "\\diw-overlay.log", std::ios::out | std::ios::app);
+        std::ofstream f(ExeDirectory() + "\\balance-island.log", std::ios::out | std::ios::app);
         f << "FATAL: " << e.what() << "\n";
         NoteFatal((std::string("FATAL(std): ") + e.what()).c_str());
         return 2;
     } catch (...) {
         // 非 std::exception：表现和硬崩溃一样是「静默消失」，必须至少留一行。
-        std::ofstream f(ExeDirectory() + "\\diw-overlay.log", std::ios::out | std::ios::app);
+        std::ofstream f(ExeDirectory() + "\\balance-island.log", std::ios::out | std::ios::app);
         f << "FATAL: unknown exception\n";
         NoteFatal("FATAL(unknown): non-std exception thrown out of Run()");
         return 3;

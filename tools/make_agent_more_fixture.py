@@ -7,7 +7,7 @@
 
 用法：
   python tools/make_agent_more_fixture.py build/agent_more
-  diw_overlay.exe --agent-home=<abs path to build/agent_more>
+  balance_island.exe --agent-home=<abs path to build/agent_more>
 """
 import json
 import os

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DynamicIslandWin LANGUAGES CXX)
+project(BalanceIsland LANGUAGES CXX)
 
 # C++/WinRT 在 C++17 下依赖 experimental/coroutine，该头已被 MSVC 14.51 弃用。
 # 读真实媒体/通知必须用 C++20；核心域本身仍是 C++17 兼容语法，不受影响。
@@ -38,10 +38,10 @@ add_test(NAME render_tests COMMAND render_tests)
 
 # 桌面胶囊可执行程序（GUI 子系统）。
 # 注意：这是「独立进程 + 分层窗口」形态，不注入 explorer.exe，也不依赖 Windhawk。
-add_executable(diw_overlay WIN32 src/win32/overlay_main.cpp)
-target_include_directories(diw_overlay PRIVATE contracts src/core src/win32)
+add_executable(balance_island WIN32 src/win32/overlay_main.cpp)
+target_include_directories(balance_island PRIVATE contracts src/core src/win32)
 if(MSVC)
   # windowsapp.lib：WinRT 激活（SMTC / UserNotificationListener）
   # ole32：Core Audio，用于读系统音量
-  target_link_libraries(diw_overlay PRIVATE user32 gdi32 gdiplus shell32 ole32 windowsapp)
+  target_link_libraries(balance_island PRIVATE user32 gdi32 gdiplus shell32 ole32 windowsapp)
 endif()

@@ -1,4 +1,4 @@
-﻿# 长跑基线：按固定间隔采样 diw_overlay 的资源占用，最后给出增长判定。
+# 长跑基线：按固定间隔采样 balance_island 的资源占用，最后给出增长判定。
 #
 #   powershell -ExecutionPolicy Bypass -File tools\soak.ps1
 #   powershell -ExecutionPolicy Bypass -File tools\soak.ps1 -Minutes 240
@@ -13,7 +13,7 @@ param(
     [int]$Minutes = 60,
     [int]$IntervalSec = 60,
     [switch]$Start,                     # 先启动一个实例再采样
-    [string]$Exe = 'build\cpp\diw_overlay.exe',
+    [string]$Exe = 'build\cpp\balance_island.exe',
     [string]$Out = ''                   # 默认 build\soak-<时间戳>.csv
 )
 
@@ -32,8 +32,8 @@ if ($Start) {
     Start-Sleep -Seconds 3
 }
 
-$proc = Get-Process -Name 'diw_overlay' -ErrorAction SilentlyContinue
-if ($null -eq $proc) { throw "diw_overlay 没在运行。加 -Start，或先手动启动。" }
+$proc = Get-Process -Name 'balance_island' -ErrorAction SilentlyContinue
+if ($null -eq $proc) { throw "balance_island 没在运行。加 -Start，或先手动启动。" }
 
 $total = [math]::Max(1, [int]($Minutes * 60 / $IntervalSec))
 $rows = @()

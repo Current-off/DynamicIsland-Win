@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 规则引擎（C++17，纯函数，无平台依赖）
+// balance_island / 规则引擎（C++17，纯函数，无平台依赖）
 //
 // 这一层回答一个问题：**这件事该不该出现在岛上**。
 // 输入是「事件候选 + 用户配置 + 当前时刻」，输出是「显示 / 不显示 + 原因」。
@@ -17,8 +17,8 @@
 //   - allow 列表为空 = 不启用白名单；非空 = 只放行命中项。
 //   - 事件自身没有应用/文件名（音量、电源、设备）时，对应的应用/扩展规则不参与判定，
 //     否则「白名单只留微信」会把音量提示一起干掉。
-#ifndef DIW_SRC_CORE_RULES_HPP
-#define DIW_SRC_CORE_RULES_HPP
+#ifndef BI_SRC_CORE_RULES_HPP
+#define BI_SRC_CORE_RULES_HPP
 
 #include <algorithm>
 #include <cctype>
@@ -29,7 +29,7 @@
 
 #include "mini_json.hpp"
 
-namespace diw {
+namespace bi {
 
 // ---------------------------------------------------------------- 字符串工具
 
@@ -478,6 +478,6 @@ inline RuleVerdict EvaluateRules(const RuleConfig& cfg, const RuleInput& in) {
     return verdict;
 }
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_CORE_RULES_HPP
+#endif  // BI_SRC_CORE_RULES_HPP

@@ -10,31 +10,31 @@
 
 namespace {
 
-class NullRenderer : public diw::IOverlayRenderer {
+class NullRenderer : public bi::IOverlayRenderer {
 public:
-    bool Initialize(const diw::RendererConfig&) override { return true; }
-    void Render(const diw::Frame&) override { render_count_++; }
+    bool Initialize(const bi::RendererConfig&) override { return true; }
+    void Render(const bi::Frame&) override { render_count_++; }
     void SetSuspended(bool suspended) override { suspended_ = suspended; }
-    void SetBackdropMode(diw::BackdropMode mode) override { mode_ = mode; }
+    void SetBackdropMode(bi::BackdropMode mode) override { mode_ = mode; }
     void Shutdown() override {}
 
     int render_count() const { return render_count_; }
     bool suspended() const { return suspended_; }
-    diw::BackdropMode mode() const { return mode_; }
+    bi::BackdropMode mode() const { return mode_; }
 
 private:
     int render_count_ = 0;
     bool suspended_ = false;
-    diw::BackdropMode mode_ = diw::BackdropMode::Acrylic;
+    bi::BackdropMode mode_ = bi::BackdropMode::Acrylic;
 };
 
-class ClockProvider : public diw::IProvider {
+class ClockProvider : public bi::IProvider {
 public:
     std::string Name() const override { return "clock"; }
     bool IsSensitive() const override { return false; }
     void SetEnabled(bool enabled) override { enabled_ = enabled; }
     bool IsEnabled() const override { return enabled_; }
-    std::vector<diw::ProviderUpdate> Poll(std::int64_t) override { return {}; }
+    std::vector<bi::ProviderUpdate> Poll(std::int64_t) override { return {}; }
 
 private:
     bool enabled_ = false;  // 敏感/外接 Provider 默认关闭
@@ -43,12 +43,12 @@ private:
 }  // namespace
 
 int main() {
-    static_assert(diw::kProtocolVersion == 1, "protocol version must be 1");
-    static_assert(diw::kMaxVisibleActivities == 4, "max visible must be 4");
-    static_assert(diw::kAnimationMaxMs == 2000, "animation cap must be 2000ms");
-    static_assert(diw::kExpandedMinHeight <= diw::kExpandedMaxHeight, "bad height range");
+    static_assert(bi::kProtocolVersion == 1, "protocol version must be 1");
+    static_assert(bi::kMaxVisibleActivities == 4, "max visible must be 4");
+    static_assert(bi::kAnimationMaxMs == 2000, "animation cap must be 2000ms");
+    static_assert(bi::kExpandedMinHeight <= bi::kExpandedMaxHeight, "bad height range");
 
-    diw::Activity a;
+    bi::Activity a;
     a.id = "media:now-playing";
     a.kind = "media";
     a.title = "playing";
@@ -56,20 +56,20 @@ int main() {
     a.stale_at_ms = 5000;
     a.content_json = "{\"playing\":true}";
 
-    diw::Frame frame;
-    frame.visible.push_back(diw::ScheduledActivity{a, diw::Presentation::Compact,
+    bi::Frame frame;
+    frame.visible.push_back(bi::ScheduledActivity{a, bi::Presentation::Compact,
                                                    "compactLeading"});
     frame.now_ms = 1000;
 
     NullRenderer renderer;
-    assert(renderer.Initialize(diw::RendererConfig{}));
+    assert(renderer.Initialize(bi::RendererConfig{}));
     renderer.Render(frame);
     renderer.SetSuspended(true);
-    renderer.SetBackdropMode(diw::BackdropMode::OpaqueFallback);
+    renderer.SetBackdropMode(bi::BackdropMode::OpaqueFallback);
     renderer.Shutdown();
     assert(renderer.render_count() == 1);
     assert(renderer.suspended());
-    assert(renderer.mode() == diw::BackdropMode::OpaqueFallback);
+    assert(renderer.mode() == bi::BackdropMode::OpaqueFallback);
 
     ClockProvider provider;
     assert(!provider.IsEnabled());
@@ -78,6 +78,6 @@ int main() {
     assert(provider.IsEnabled());
     assert(provider.Poll(0).empty());
 
-    assert(std::abs(diw::kCornerRadius - diw::kConcentricMargin - 24.0) < 1e-9);
+    assert(std::abs(bi::kCornerRadius - bi::kConcentricMargin - 24.0) < 1e-9);
     return 0;
 }

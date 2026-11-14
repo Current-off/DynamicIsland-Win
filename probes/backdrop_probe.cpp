@@ -58,7 +58,7 @@ int wmain(int argc, wchar_t** argv) {
 
     int exit_code = 0;
     {
-        diw::win32::Backdrop backdrop;
+        bi::win32::Backdrop backdrop;
         const bool ok = backdrop.Capture(x, y, w, h, 0, 0, 0, 0, nullptr);
         std::printf("capture=%d  raw=%.1f  blur=%.1f\n", ok ? 1 : 0,
                     backdrop.MeanLuminanceRaw(), backdrop.MeanLuminance());

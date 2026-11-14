@@ -1,5 +1,10 @@
 # 验证记录（2026-11-12）
 
+> **档案说明（v0.2.0）**：自 2026-11-14 起项目更名为 `balance_island 平衡岛`。
+> 本文件是**历史记录**，第二轮至第二十六轮里的用户原话、日志样本与当时的产品名
+> 均按原样保留，改动会破坏记录真实性。当前名称、标识与技术标识映射见
+> [更名一致性报告](RENAME.md)；命名残留由 `python tools/naming.py --check` 审计。
+
 本文件如实记录本轮实际执行的命令、环境、结果、发现的缺陷与剩余缺口。
 遵循项目铁律：**自动化通过 ≠ 实机视觉验收**，不得以测试通过概括功能已完成。
 
@@ -27,7 +32,7 @@
 ### 1. 一键验证（首次）
 
 ```
-cd DynamicIsland-Win && python tools/verify.py
+cd balance_island && python tools/verify.py
 ```
 
 结果：`RESULT: FAIL`，退出码 1。
@@ -45,7 +50,7 @@ cd DynamicIsland-Win && python tools/verify.py
 ### 2. 一键验证（修复后）
 
 ```
-cd DynamicIsland-Win && python tools/verify.py
+cd balance_island && python tools/verify.py
 ```
 
 结果：`RESULT: PASS`，退出码 0。
@@ -59,7 +64,7 @@ cd DynamicIsland-Win && python tools/verify.py
 ### 3. 行为演示
 
 ```
-cd DynamicIsland-Win && python demo.py
+cd balance_island && python demo.py
 ```
 
 结果：退出码 0。可观察链路：
@@ -95,12 +100,12 @@ cl.exe -nologo -std:c++17 -EHsc -W4 tests/cpp/contract_smoke.cpp
   根因：`contract_smoke.cpp` 用 `#include "../../contracts/Types.hpp"`，
   而 `IOverlayRenderer.hpp` 内部用 `#include "Types.hpp"`，
   两条不同路径使 MSVC 的 `#pragma once` 视为不同文件，头文件被包含两次。
-- 连带引发 `std::optional<diw::Activity>` 实例化失败（`C2139` / `C2079`）。
+- 连带引发 `std::optional<bi::Activity>` 实例化失败（`C2139` / `C2079`）。
 - `warning C4819`：源码含中文注释，MSVC 按 936 代码页解释。
 
 **修复**（未放宽验收、未跳过失败分支）：
 1. 三个 `contracts/*.hpp` 全部改用传统 include guard
-   （`#ifndef DIW_CONTRACTS_..._HPP`），不再依赖 `#pragma once`。
+   （`#ifndef BI_CONTRACTS_..._HPP`），不再依赖 `#pragma once`。
 2. 冒烟测试改用 `#include "Types.hpp"` + 编译参数 `-I contracts`，
    不再使用 `../../` 相对路径。
 3. 编译选项加 `/utf-8` 消除编码警告。
@@ -272,7 +277,7 @@ live media=SMTC 链路验证 (playing) vol=76% batt=100%
 
 ```
 bash tools/build_cpp_msvc.sh
-→ contract_smoke / core_tests / render_tests / diw_overlay / smtc_probe 五个目标编译成功
+→ contract_smoke / core_tests / render_tests / balance_island / smtc_probe 五个目标编译成功
 → core_tests run=69 failed=0
 → render_tests run=20 failed=0
 → /W4 零警告
@@ -378,7 +383,7 @@ rules reloaded: ok
 设置窗口 → 配置文件这条链路单独验证过（`--selftest`，进程内填控件再走收集逻辑）：
 
 ```
-$ build/cpp/diw_overlay.exe --selftest
+$ build/cpp/balance_island.exe --selftest
 selftest: app_block=2 first=wechat volume=0 quiet=1 22:30
 selftest: wrote ...\build\cpp\settings_selftest.json
 ```
@@ -592,7 +597,7 @@ Bayer 与坐标绑定，画面静止时图案也静止。
 
 链路：`SMTC Thumbnail` → `IRandomAccessStreamReference` → `DataReader` 读字节 →
 `SHCreateMemStream` + GDI+ 解码 → 中心裁成正方形、缩到 160px →
-`%LOCALAPPDATA%\DynamicIsland-Win\covers\<fnv1a>.png` → 渲染层按路径加载并缓存。
+`%LOCALAPPDATA%\balance_island\covers\<fnv1a>.png` → 渲染层按路径加载并缓存。
 
 为什么不塞进 `content_json`：那是跨层文本契约，塞二进制要么 base64 膨胀 33%，
 要么让 `Activity` 依赖平台类型。用路径让契约保持纯数据。
@@ -1104,7 +1109,7 @@ inject mouse=play (110,110)                   / media: toggle play/pause
 
 用户配置已写入 `"lyrics_proxy": "http://127.0.0.1:3876"`，实例重启后验证：
 ```
-lyrics: fetch "DynamicIsland-Win - SMTC 链路验证"
+lyrics: fetch "balance_island - SMTC 链路验证"
 lyrics: status=none lines=0          ← 不是 error，HTTP 通了，只是这首歌没歌词
 ```
 （用 `media_inject_probe` 造真实 SMTC 会话验证，避免依赖用户当时是否在放歌。）
@@ -1614,10 +1619,10 @@ QQ 音乐是给了时长的（日志里 `15xxxms`），所以拖得动；若某�
 [workbuddy] 2026-11-12-14-12-37  (running)
   model   : DeepSeek-V4.1-Flash
   task    : 查看 ZenDesktop 开源项目
-  action  : 正在执行 ./build/cpp/diw_overlay.exe --duration=900…
-  detail  : Bash · ./build/cpp/diw_overlay.exe --duration=900…
+  action  : 正在执行 ./build/cpp/balance_island.exe --duration=900…
+  detail  : Bash · ./build/cpp/balance_island.exe --duration=900…
   elapsed : 10h03   tools=140
-    · Bash  ./build/cpp/diw_overlay.exe --duration=900…
+    · Bash  ./build/cpp/balance_island.exe --duration=900…
     · Edit  win32/agent_sources.hpp
     · Read  win32/agent_sources.hpp
 ```
@@ -1629,7 +1634,7 @@ QQ 音乐是给了时长的（日志里 `15xxxms`），所以拖得动；若某�
 
 | 文件 | 内容 |
 |------|------|
-| `agent_compact_fixture.png` | 小岛：橙色六芒星 + `DynamicIsland-Win` + `正在执行 tools/build_cpp_msvc.sh` + `2/4` + 三点心跳 |
+| `agent_compact_fixture.png` | 小岛：橙色六芒星 + `balance_island` + `正在执行 tools/build_cpp_msvc.sh` + `2/4` + 三点心跳 |
 | `agent_waiting.png` / `agent_overview_waiting.png` | 等待输入：状态点转琥珀，心跳停 |
 | `agent_todos.png` | 大岛（Claude Code）：任务 4 条，2 done / 1 in progress / 1 pending，页脚 `Bash · tools/build_cpp_msvc.sh` |
 | `agent_codex.png` | 大岛（Codex）：`api-server · 06:05 · gpt-5-codex`，`update_plan` 清单 3 条 |
@@ -2106,7 +2111,7 @@ browser 28 / hanzi 6 / cache 8。
 窗口标题是人写的字符串，三种分隔符（`-` / `–` en dash / `—` em dash），五种形态：
 
 ```
-renderer.hpp — DynamicIsland-Win — Trae CN        有工作区
+renderer.hpp — balance_island — Trae CN        有工作区
 ● app.ts — web — Cursor                           有未保存修改（VS Code 系）
 *main.cpp – order-service – IntelliJ IDEA 2024.1  JetBrains，星号 + 版本号
 README.md - Notepad++                             无工作区
@@ -2152,15 +2157,15 @@ hosts - Notepad++ [Administrator]                 管理员标记
 editor: foreground=Trae CN title=Trae CN → 不出岛（不是编辑器或无障碍信息）
 ```
 
-注入链路（`--editor="Trae CN|*renderer.hpp - DynamicIsland-Win - Trae CN"`）：
+注入链路（`--editor="Trae CN|*renderer.hpp - balance_island - Trae CN"`）：
 
 ```
-editor: Trae CN 「DynamicIsland-Win」 renderer.hpp (C++)
+editor: Trae CN 「balance_island」 renderer.hpp (C++)
 ```
 
 | 文件 | 内容 |
 |------|------|
-| `editor_2x.png` | 紧凑态：`< >` 图标 + renderer.hpp + `DynamicIsland-Win · C++` |
+| `editor_2x.png` | 紧凑态：`< >` 图标 + renderer.hpp + `balance_island · C++` |
 | `editor_dirty_2x.png` | 带未保存圆点 |
 | `editor_exp_crop.png` | 展开态：文件名 + ● → 项目 · 语言 → 页脚 Trae CN |
 
@@ -2226,7 +2231,7 @@ PROFILE build=0.06ms draw=8.4..11ms present=0.63ms
 
 ### 4. 稳定性
 
-- **崩溃现场**：`SetUnhandledExceptionFilter` 写独立的 `diw-overlay.crash.log`
+- **崩溃现场**：`SetUnhandledExceptionFilter` 写独立的 `balance-island.crash.log`
   （异常码 + 出错地址）+ minidump，dbghelp 走 `GetProcAddress` 动态加载。
   实测触发 `0xC0000005` 后产出 `FATAL(hard): code=0xC0000005 (ACCESS_VIOLATION)
   addr=0x...` 与 906KB dump。crash 文件不参与日志滚动。

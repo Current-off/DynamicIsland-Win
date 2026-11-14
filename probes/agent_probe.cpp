@@ -33,9 +33,9 @@ std::int64_t NowMs() {
     return static_cast<std::int64_t>((u.QuadPart - 116444736000000000ULL) / 10000ULL);
 }
 
-void PrintSession(const diw::AgentSession& s, std::int64_t now) {
+void PrintSession(const bi::AgentSession& s, std::int64_t now) {
     std::printf("  [%s] %s  (%s)\n", s.provider.c_str(), s.project.c_str(),
-                diw::AgentStateAt(s, now));
+                bi::AgentStateAt(s, now));
     std::printf("    session : %s\n", s.session_id.c_str());
     std::printf("    cwd     : %s\n", s.cwd.c_str());
     std::printf("    model   : %s\n", s.model.empty() ? "-" : s.model.c_str());
@@ -47,8 +47,8 @@ void PrintSession(const diw::AgentSession& s, std::int64_t now) {
                 static_cast<long long>(s.started_ms), static_cast<long long>(s.last_event_ms),
                 static_cast<long long>(now));
     std::printf("    elapsed : %s   tools=%d  ctx=%s  todo=%d/%d\n",
-                diw::AgentElapsedText(s, now).c_str(), s.tool_calls,
-                diw::TokenText(s.ctx_tokens).empty() ? "-" : diw::TokenText(s.ctx_tokens).c_str(),
+                bi::AgentElapsedText(s, now).c_str(), s.tool_calls,
+                bi::TokenText(s.ctx_tokens).empty() ? "-" : bi::TokenText(s.ctx_tokens).c_str(),
                 s.done_count, s.todo_count);
     for (const auto& t : s.todos) {
         const char* mark = t.status == "completed" ? "[x]" : (t.status == "in_progress" ? "[>]" : "[ ]");
@@ -69,13 +69,13 @@ int main(int argc, char** argv) {
         if (std::strncmp(argv[i], "--watch=", 8) == 0) {
             watch_sec = std::atof(argv[i] + 8);
         } else if (std::strncmp(argv[i], "--home=", 7) == 0) {
-            home = diw::win32::AgentWiden(argv[i] + 7);
+            home = bi::win32::AgentWiden(argv[i] + 7);
         } else if (std::strcmp(argv[i], "--all") == 0) {
             ignore_window = true;
         }
     }
 
-    diw::win32::AgentWatcher watcher;
+    bi::win32::AgentWatcher watcher;
     watcher.SetMaxIslands(ignore_window ? 40 : 4);
     watcher.SetIgnoreWindow(ignore_window);
     if (!home.empty()) {
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
         std::printf("  sqlite: %s\n", watcher.SqliteDiag().c_str());
         for (const auto& f : files) {
             std::printf("  file %s  %s  offset=%llu size=%llu primed=%d\n", f.provider.c_str(),
-                        diw::win32::AgentNarrow(f.path).c_str(),
+                        bi::win32::AgentNarrow(f.path).c_str(),
                         static_cast<unsigned long long>(f.offset),
                         static_cast<unsigned long long>(f.size), f.primed ? 1 : 0);
         }

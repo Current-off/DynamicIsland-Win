@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 系统状态 → 实时活动的映射层（C++17，平台无关）
+// balance_island / 系统状态 → 实时活动的映射层（C++17，平台无关）
 //
 // 为什么单独拆出来：
 //   采集（live_sources.hpp）要 Win32/WinRT，只能实机验证；
@@ -14,8 +14,8 @@
 //   消息通知 75 > 低电量 70 > 复制/截图 68 > 文件落盘 65 > 设备接入 62
 //   > 媒体 60 > 电源插拔 58 > 音量 30
 // 前四个都是「刚发生、有信息量、需要看一眼」，媒体是「你自己在放，当底噪」。
-#ifndef DIW_SRC_CORE_LIVE_MAPPING_HPP
-#define DIW_SRC_CORE_LIVE_MAPPING_HPP
+#ifndef BI_SRC_CORE_LIVE_MAPPING_HPP
+#define BI_SRC_CORE_LIVE_MAPPING_HPP
 
 #include <cstdint>
 #include <string>
@@ -28,7 +28,7 @@
 #include "mini_json.hpp"
 #include "rules.hpp"
 
-namespace diw {
+namespace bi {
 
 // ---------------------------------------------------------------- 快照结构
 // 全部是纯数据，采集层填、映射层读、渲染层不碰。
@@ -680,6 +680,6 @@ inline LiveActivities BuildActivities(const Snapshot& s, std::int64_t now_ms, in
     return out;
 }
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_CORE_LIVE_MAPPING_HPP
+#endif  // BI_SRC_CORE_LIVE_MAPPING_HPP

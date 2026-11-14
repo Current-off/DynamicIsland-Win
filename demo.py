@@ -29,7 +29,7 @@ def show(rt: ActivityRuntime, label: str, now_ms: int) -> None:
 
 def main() -> int:
     print("=" * 62)
-    print("DynamicIsland-Win / 核心域行为演示")
+    print("balance_island / 核心域行为演示")
     print("=" * 62)
 
     rt = ActivityRuntime()

@@ -17,7 +17,7 @@
 在资源管理器里双击：
 
 ```
-DynamicIsland-Win\build\cpp\diw_overlay.exe
+balance_island\build\cpp\balance_island.exe
 ```
 
 如果还没编译过，先在项目根目录跑一次：
@@ -36,7 +36,7 @@ bash tools/build_cpp_msvc.sh
 
 ```bash
 # 1) 启动（默认读真实系统）
-build\cpp\diw_overlay.exe
+build\cpp\balance_island.exe
 
 # 2) 随便复制点什么（记事本、浏览器、VS Code 都行），岛应该在 1 秒内出现「已复制」
 #    右侧小字是复制来源的进程名，例如 Code / chrome / WorkBuddy
@@ -58,7 +58,7 @@ build\cpp\diw_overlay.exe
 
 ```bash
 # 文件位置
-%APPDATA%\DynamicIsland-Win\rules.json
+%APPDATA%\balance_island\rules.json
 
 # 改完保存，1 秒内日志出现：
 rules reloaded: ok
@@ -70,7 +70,7 @@ rules reloaded: ok
 设置窗口本身也能自检（不需要人点，用于回归）：
 
 ```bash
-build\cpp\diw_overlay.exe --selftest
+build\cpp\balance_island.exe --selftest
 # → selftest: app_block=2 first=wechat volume=0 quiet=1 22:30
 # → 结果写到 build\cpp\settings_selftest.json，不动你的真实配置
 ```
@@ -81,7 +81,7 @@ build\cpp\diw_overlay.exe --selftest
 不是色块加音符。封面缓存在：
 
 ```bash
-%LOCALAPPDATA%\DynamicIsland-Win\covers\<hash>.png
+%LOCALAPPDATA%\balance_island\covers\<hash>.png
 ```
 
 没在放歌时想验证这条链路，可以用注入探针造一个真实会话（静音，不出声）：
@@ -97,7 +97,7 @@ build\cpp\cover_probe.exe                                 # 逐段打印会话/�
 
 | 你做什么 | 预期看到 | 如果没看到，查这里 |
 |----------|----------|-------------------|
-| 在网易云 / QQ音乐 / B站 / 浏览器按下播放 | 胶囊出现在顶部居中，显示**真实歌名**、歌手·专辑、右侧 `0:18 / 2:00` 格式的实时进度 | `diw-overlay.log` 里找 `live media=`，若为 `none` 说明系统没有活跃会话（部分播放器不注册 SMTC） |
+| 在网易云 / QQ音乐 / B站 / 浏览器按下播放 | 胶囊出现在顶部居中，显示**真实歌名**、歌手·专辑、右侧 `0:18 / 2:00` 格式的实时进度 | `balance-island.log` 里找 `live media=`，若为 `none` 说明系统没有活跃会话（部分播放器不注册 SMTC） |
 | 暂停播放 | 胶囊保留但律动条停止、优先级降到 45（若同时有通知会主动让位） | — |
 | 退出播放器 | 胶囊自动消失（不是残留上一首） | 若残留，说明 `persistent_ids` 结束逻辑失效 |
 | 复制任意文字 | 出现「已复制」胶囊，3 秒后自动退场 | 日志 `clip_seq` 是否递增 |
@@ -192,7 +192,7 @@ bash tools/verify_visual.sh
 | `--snapshot=路径.png` | 在 `--snapshot-at` 时刻把**自身绘制结果**存成 PNG（含透明通道） |
 | `--snapshot-at=毫秒` | 配合 `--snapshot` / `--grab` 使用 |
 | `--grab=路径.png` | 在 `--snapshot-at` 时刻从屏幕 DC 抓取桌面实际画面 |
-| `--log=路径.log` | 指定日志，默认 exe 同目录 `diw-overlay.log` |
+| `--log=路径.log` | 指定日志，默认 exe 同目录 `balance-island.log` |
 
 日志只在**可观察状态变化**时写一行，例如：
 

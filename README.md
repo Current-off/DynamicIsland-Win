@@ -1,13 +1,20 @@
 <div align="center">
 
-# DynamicIsland-Win
+# balance_island 平衡岛
 
 [![CI](https://github.com/Current-off/DynamicIsland-Win/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Current-off/DynamicIsland-Win/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4.svg)](#三十秒装好)
 
-**Windows 也有灵动岛。** 屏幕顶部一颗胶囊，把「正在发生的事」收进来 ——
-正在播的歌、正在跑的任务、正在改的文件、正在开的会。
+**屏幕顶部的一枚注意力配重，不是一块状态舞台。**
+
+它把正在播的歌、正在跑的任务、正在改的文件、正在开的会收进一个固定地址，
+但只在你**需要知道**时才占住你的视线：该出现时出现，该退让时退让，该安静时
+缩成一枚呼吸点。深度操作一律回原应用——岛不替你做事，只替你维持平衡。
+
+这不是对 iOS 灵动岛的复刻。核心概念、三态布局规则、交互语义与视觉规范见
+[**平衡岛范式**](docs/PARADIGM.md)，规则常量同时落在代码与契约里（
+[`contracts/balance-paradigm.json`](contracts/balance-paradigm.json)）。
 
 ![液态玻璃](docs/images/hero-liquid-glass.png)
 
@@ -19,19 +26,30 @@
 
 **A. 直接用**（不需要编译环境）
 
-下载 [Releases](../../releases) 里的 `DynamicIsland-Win-*.zip` → 解压 → 双击 `install.cmd`。
-装到 `%LOCALAPPDATA%\DynamicIsland-Win`，并设置开机自启。
+下载 [Releases](../../releases) 里的 `balance_island-*.zip` → 解压 → 双击 `install.cmd`。
+装到 `%LOCALAPPDATA%\balance_island`，并设置开机自启。
 
 > **首次运行会被 Windows 拦一下，这是正常的。** 本程序没有代码签名证书，会弹
 > 「Windows 已保护你的电脑 / 发布者：未知发布者」。点【更多信息】→【仍要运行】，
-> 只会问这一次。不放心的话，用下面的 B 自己编译。
+> 只会问这一次。警告的意思是「Windows 还不认识这个文件」，**不是「查出了恶意行为」**；
+> 签名证书是付费产品，即便签了名也要靠下载量慢慢积累信誉。
+> **请不要为了装它而关闭 Defender / SmartScreen**，改用下面的核验与自行编译。
+>
+> 每个 Release 都附 `SHA256SUMS-<版本>.txt`，下载后先核一遍：
+>
+> ```powershell
+> (Get-FileHash .\balance_island-v0.2.0.zip -Algorithm SHA256).Hash.ToLower()
+> ```
+>
+> 与清单里的值一致再解压。企业环境若被 AppLocker / Smart App Control 硬阻断，
+> 请让 IT **按哈希放行**（不需要证书），或走源码自建。
 >
 > 卸载：双击 `uninstall.cmd`（配置默认保留）。
 
 **B. 从源码构建**（需要 Windows 10 1809+ 与 VS2022，勾选「使用 C++ 的桌面开发」）
 
 ```powershell
-git clone <this-repo> && cd DynamicIsland-Win
+git clone <this-repo> && cd balance_island
 
 # 编译 + 跑测试（569 项断言，约 40 秒）
 powershell -ExecutionPolicy Bypass -File tools\build.ps1
@@ -55,7 +73,7 @@ tools\send-activity.ps1 -Title "构建通过" -Kind "bridge.ci" -Content '{"body
 ```
 
 协议见 [docs/protocol.md](docs/protocol.md)（一次连接一条消息，UTF-8 JSON lines，
-服务端回一行确认）。其他语言连 `\\.\pipe\DynamicIslandWin-v1` 写一行即可。
+服务端回一行确认）。其他语言连 `\\.\pipe\BalanceIsland-v1` 写一行即可。
 
 ## 它显示什么
 
@@ -98,12 +116,20 @@ tools\send-activity.ps1 -Title "构建通过" -Kind "bridge.ci" -Content '{"body
 | 右键胶囊 / **点托盘图标** | 同一个菜单：设置 / 展开全部 / 暂停 30 分钟 / 退出 |
 | 拖进度条 | seek |
 | **媒体展开态底部五个钮** | 上一首 · −10 秒 · 播放暂停 · +10 秒 · 下一首 |
-| 点标题 | 切回对应的应用 / 编辑器 / 浏览器 / 终端 |
+| 点标题 | 切回对应的应用 / 编辑器 / 浏览器 / 终端（岛内不做二次操作台） |
+| × | 收掉**这一条**，不是退出程序 |
+| **按住 Ctrl** | **让路**：鼠标穿透 + 降到 35% 不透明度，背后的内容立刻可点。松开即恢复 |
 | 全屏、或久未交互 | 收成顶部一条极淡的把手，点一下叫醒 |
 | **没有任何活动时** | 收成一枚与休眠条同高的小圆，缓慢呼吸 —— 它只回答「还在不在跑」，点它出菜单 |
 
+「让路」是平衡岛自己的交互语义：把「是否被遮挡」的决定权交回用户，
+不需要去设置里翻开关，更不需要关掉程序。窗口用 `WS_EX_TRANSPARENT` +
+`SWP_FRAMECHANGED` 切换，松开 Ctrl 由全局键状态检测（穿透后收不到键盘消息）。
+
 托盘图标就是这个程序的「门」：胶囊可能正处在休眠（只剩一条细把手）甚至完全不显示
 的状态，没有托盘时会找不到退出和设置的入口。Explorer 重启后图标会自动重挂。
+「关得掉」是硬要求——2021 年 V2EX 上首个 Windows 顶部刘海工具最集中的差评
+就是「咋关掉」。
 
 ## 隐私
 
@@ -114,12 +140,14 @@ tools\send-activity.ps1 -Title "构建通过" -Kind "bridge.ci" -Content '{"body
 
 ## 当前状态
 
-**`v0.1.4`** · `0.x` 阶段：功能仍在演进，配置格式与 IPC 协议暂不承诺向后兼容
+**`v0.2.0`** · `0.x` 阶段：功能仍在演进，配置格式与 IPC 协议暂不承诺向后兼容
 （版本号规则见 [CONTRIBUTING · 版本号约定](CONTRIBUTING.md#8-版本号约定)）。
+本版完成 [更名](docs/RENAME.md) 与 [范式定义](docs/PARADIGM.md)，
+配置会自动从旧目录迁移，详情见 [改进项清单](docs/IMPROVEMENTS.md)。
 
 C++20，MSVC `/W4` 零警告。**569 项断言**在每次构建时全部跑一遍：
 核心域 120 / 规则 161 / 渲染 33 / 交互 45 / Agent 123 / 编辑器 59 / 浏览器 28，
-另有 7 项跨语言契约校验。
+另有 **53 项跨语言契约校验**（含平衡岛范式 C++ / Python / JSON 三方一致性）。
 
 实测基线（台式机，1080p ×2 缩放，空载 4 分钟稳态）：
 
@@ -394,7 +422,7 @@ PhpStorm / RubyMine / Android Studio / DataGrip）。
 
 ## 你能决定什么该响应
 
-右键胶囊 → **设置…**（或 `build/cpp/diw_overlay.exe --settings`）：
+右键胶囊 → **设置…**（或 `build/cpp/balance_island.exe --settings`）：
 
 | 维度 | 可配置内容 | 生效方式 |
 |------|-----------|----------|
@@ -412,7 +440,7 @@ PhpStorm / RubyMine / Android Studio / DataGrip）。
 | 中文 | `simplify_chinese`（歌词与媒体标题/歌手的繁体转简体，默认开） | 关掉后原样显示繁体 |
 | 视觉 | 磨砂玻璃效果（透出背后的屏幕内容，实时模糊 + 顶部受光 + 镜面亮线） | 关掉后回到纯不透明深色胶囊 |
 
-配置文件：`%APPDATA%\DynamicIsland-Win\rules.json`（首次运行自动生成，
+配置文件：`%APPDATA%\balance_island\rules.json`（首次运行自动生成，
 示例见 [`config/rules.example.json`](config/rules.example.json)）。
 **保存即生效**：运行中的实例每 500ms 查一次文件 mtime，改完不用重启；
 写坏了（少个逗号）会保留上一份可用配置并记一行日志，不会让胶囊停摆。
@@ -451,7 +479,7 @@ Python 侧是**可执行规约**（executable specification），不是产品实
 ## 目录结构
 
 ```
-DynamicIsland-Win/
+balance_island/
 ├── src/core/      【产品实现】与平台无关的纯逻辑：activity（调度/状态机）、rules（用户规则）、
 │                  live_mapping（系统状态→活动）、agent_session（七家 Agent 会话归一化）、
 │                  browser_page、editor_state、mini_json
@@ -487,7 +515,7 @@ Provider 层（内置系统源 / 桥接集成 / 第三方 SDK）
 ## 关键设计决策
 
 1. **引入 Activity 语义模型**：`compact / minimal / expanded` 三态、`relevanceScore` 优先级调度、
-   `staleDate` 过期结束。这是现有 Windows 开源灵动岛项目普遍缺失的内核。
+   `staleDate` 过期结束。这是现有 同类 Windows 开源项目普遍缺失的内核。
 2. **渲染层不注入 `explorer.exe`**：规避 ZenDesktop 记录的启动竞态与内核反作弊冲突。
 3. **双进程 + 离线降级**：桥接进程崩溃或升级时，内置 Provider 的媒体与系统状态仍可显示。
 4. **协议版本协商**：消除 dynamic-island-v2 中「mod 源码必须与桥接构建严格匹配」的交付缺陷。
@@ -511,10 +539,10 @@ Provider 层（内置系统源 / 桥接集成 / 第三方 SDK）
 
 1. **先看系统通知中心有没有这条消息**：Win+N 打开通知中心。
    - 完全没有 → 应用自己没往系统发 toast（很多 IM 默认只用应用内弹窗，或对该聊天开了「消息免打扰」/ 正在聊的窗口不发通知）。
-     这类通知**任何程序都读不到**，不是灵动岛的问题。到应用设置里把「系统通知」打开即可。
-   - 有，且几秒后还在 → 灵动岛应该已经显示过；检查是否被规则静默（见下条日志）。
+     这类通知**任何程序都读不到**，不是平衡岛的问题。到应用设置里把「系统通知」打开即可。
+   - 有，且几秒后还在 → 平衡岛应该已经显示过；检查是否被规则静默（见下条日志）。
    - 有，但瞬间消失 → 属于「应用自己撤得太快」，见第 3 条。
-2. **看日志**（`build/cpp/diw-overlay.log`）：
+2. **看日志**（`build/cpp/balance-island.log`）：
    - 出现 `notif: id=… app=微信 title="…" icon=ok` → 采到了，说明是显示/规则环节，看下一行
      `blocked: notification/…` 是否被你的规则拦掉（应用黑名单 / 免打扰时段 / 事件开关）。
    - 完全没有 `notif:` 行 → 采样层没看到这条通知，回到第 1 条。

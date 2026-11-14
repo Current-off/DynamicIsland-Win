@@ -1,4 +1,4 @@
-// DynamicIsland-Win / 编码 Agent 会话解析（C++17，纯函数，无平台依赖）
+// balance_island / 编码 Agent 会话解析（C++17，纯函数，无平台依赖）
 //
 // 这个文件回答一个问题：**这个 Agent 现在在干什么**。
 //
@@ -15,8 +15,8 @@
 //   ParseAgentJsonLine()  一行 JSON -> 0..N 个归一化事件（各家格式差异都在这里）
 //   ApplyAgentEvent()     事件 -> 会话状态（任务、动作、清单、用量）
 // 采集层（win32/agent_sources.hpp）只负责找文件、读增量、喂这两步。
-#ifndef DIW_SRC_CORE_AGENT_SESSION_HPP
-#define DIW_SRC_CORE_AGENT_SESSION_HPP
+#ifndef BI_SRC_CORE_AGENT_SESSION_HPP
+#define BI_SRC_CORE_AGENT_SESSION_HPP
 
 #include <algorithm>
 #include <cctype>
@@ -30,7 +30,7 @@
 #include "mini_json.hpp"
 #include "rules.hpp"  // TrimSpaces / AsciiLower / ContainsCaseless
 
-namespace diw {
+namespace bi {
 
 // ---------------------------------------------------------------- 数据
 
@@ -922,6 +922,6 @@ inline std::string TokenText(std::int64_t tokens) {
     return buf;
 }
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_SRC_CORE_AGENT_SESSION_HPP
+#endif  // BI_SRC_CORE_AGENT_SESSION_HPP

@@ -34,7 +34,7 @@
 #include "../core/browser_page.hpp"
 #include "sqlite_lite.hpp"
 
-namespace diw {
+namespace bi {
 namespace win32 {
 
 // ---------------------------------------------------------------- 小工具
@@ -668,8 +668,8 @@ private:
         if (!favicon_dir_.empty()) return favicon_dir_;
         const std::wstring local = BrowserKnownFolder(FOLDERID_LocalAppData);
         if (local.empty()) return std::wstring();
-        const std::wstring dir = local + L"\\DynamicIsland-Win\\favicons";
-        ::CreateDirectoryW((local + L"\\DynamicIsland-Win").c_str(), nullptr);
+        const std::wstring dir = local + L"\\balance_island\\favicons";
+        ::CreateDirectoryW((local + L"\\balance_island").c_str(), nullptr);
         ::CreateDirectoryW(dir.c_str(), nullptr);
         favicon_dir_ = dir;
         return favicon_dir_;
@@ -745,7 +745,7 @@ private:
     std::wstring TempCopy(const std::wstring& path) {
         const std::wstring temp = BrowserKnownFolder(FOLDERID_LocalAppData);
         if (temp.empty()) return std::wstring();
-        const std::wstring dir = temp + L"\\DynamicIsland-Win\\browser-tmp";
+        const std::wstring dir = temp + L"\\balance_island\\browser-tmp";
         ::CreateDirectoryW(dir.c_str(), nullptr);
         std::uint64_t hash = 1469598103934665603ULL;
         for (const wchar_t c : path) {
@@ -775,4 +775,4 @@ private:
 };
 
 }  // namespace win32
-}  // namespace diw
+}  // namespace bi

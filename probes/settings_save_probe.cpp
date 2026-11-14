@@ -6,7 +6,7 @@
 // 再向窗口发 WM_COMMAND(保存)，最后把 rules.json 读出来比对。
 //
 // 用法：
-//   1) 先启动 build\cpp\diw_overlay.exe --settings
+//   1) 先启动 build\cpp\balance_island.exe --settings
 //   2) 运行本探针，它会打印保存后的关键字段
 #include <windows.h>
 #include <shlobj.h>
@@ -41,7 +41,7 @@ std::wstring ConfigPath() {
     wchar_t* appdata = nullptr;
     std::wstring dir;
     if (SUCCEEDED(::SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata)) && appdata) {
-        dir = std::wstring(appdata) + L"\\DynamicIsland-Win\\rules.json";
+        dir = std::wstring(appdata) + L"\\balance_island\\rules.json";
         ::CoTaskMemFree(appdata);
     }
     return dir;
@@ -52,11 +52,11 @@ std::wstring ConfigPath() {
 int wmain() {
     HWND hwnd = nullptr;
     for (int i = 0; i < 50 && hwnd == nullptr; ++i) {
-        hwnd = ::FindWindowW(L"DIW_SettingsWindow", nullptr);
+        hwnd = ::FindWindowW(L"BI_SettingsWindow", nullptr);
         if (hwnd == nullptr) ::Sleep(100);
     }
     if (hwnd == nullptr) {
-        std::printf("PROBE FAIL: 没找到设置窗口，请先运行 diw_overlay.exe --settings\n");
+        std::printf("PROBE FAIL: 没找到设置窗口，请先运行 balance_island.exe --settings\n");
         return 1;
     }
     std::printf("PROBE: 找到设置窗口 hwnd=%p\n", static_cast<void*>(hwnd));
@@ -99,7 +99,7 @@ int wmain() {
     const bool quiet_saved = text.find("\"enabled\": true") != std::string::npos;
     const bool from_ok = text.find("\"22:30\"") != std::string::npos;
     const bool to_ok = text.find("\"07:15\"") != std::string::npos;
-    const bool window_closed = ::FindWindowW(L"DIW_SettingsWindow", nullptr) == nullptr;
+    const bool window_closed = ::FindWindowW(L"BI_SettingsWindow", nullptr) == nullptr;
 
     std::printf("PROBE: app.block 含 wechat=%d 迅雷=%d, volume=false=%d, quiet=%d(%s-%s), 窗口已关闭=%d\n",
                 has_wechat ? 1 : 0, has_xunlei ? 1 : 0, volume_off ? 1 : 0, quiet_saved ? 1 : 0,

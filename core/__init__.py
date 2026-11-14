@@ -1,4 +1,4 @@
-"""DynamicIsland-Win 核心域（平台无关参考实现）。
+"""balance_island 核心域（平台无关参考实现）。
 
 对应规划文档 7.2 目标架构中的「核心域 Activity Runtime」。
 此包不含任何 Windows API 依赖，可在任意平台运行与测试。

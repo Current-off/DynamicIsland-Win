@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 PROTOCOL_VERSION = 1
-PIPE_NAME = r"\\.\pipe\DynamicIslandWin-v1"
+PIPE_NAME = r"\\.\pipe\BalanceIsland-v1"
 
 
 class ProtocolError(ValueError):

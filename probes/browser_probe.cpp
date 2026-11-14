@@ -19,7 +19,7 @@
 
 namespace {
 
-void PrintPage(const diw::BrowserPage& p, int index) {
+void PrintPage(const bi::BrowserPage& p, int index) {
     std::printf("  [%d] %s  (%s / %s)%s%s\n", index, p.label.c_str(), p.brand.c_str(),
                 p.profile.c_str(), p.foreground ? "  [前台]" : "", p.fullscreen ? " [全屏]" : "");
     std::printf("      title : %s\n", p.title.empty() ? "-" : p.title.c_str());
@@ -43,22 +43,22 @@ void PrintPage(const diw::BrowserPage& p, int index) {
 // 时，这一步能省掉一半的来回。
 void Check() {
     int count = 0;
-    const diw::win32::BrowserBrand* table = diw::win32::BrowserBrandTable(&count);
-    const std::wstring local = diw::win32::BrowserKnownFolder(FOLDERID_LocalAppData);
-    const std::wstring roaming = diw::win32::BrowserKnownFolder(FOLDERID_RoamingAppData);
+    const bi::win32::BrowserBrand* table = bi::win32::BrowserBrandTable(&count);
+    const std::wstring local = bi::win32::BrowserKnownFolder(FOLDERID_LocalAppData);
+    const std::wstring roaming = bi::win32::BrowserKnownFolder(FOLDERID_RoamingAppData);
     std::printf("已知品牌 %d 个：\n", count);
     for (int i = 0; i < count; ++i) {
         const auto& b = table[i];
         const std::wstring root = b.root == 'L' ? local : roaming;
         if (root.empty() || b.data_dir[0] == '\0') continue;
-        const std::wstring data = root + L"\\" + diw::win32::BrowserWiden(b.data_dir);
-        if (!diw::win32::BrowserDirExists(data)) continue;
+        const std::wstring data = root + L"\\" + bi::win32::BrowserWiden(b.data_dir);
+        if (!bi::win32::BrowserDirExists(data)) continue;
         std::printf("  %-12s %-22s %s\n", b.id, b.label,
-                    diw::win32::BrowserNarrow(data).c_str());
+                    bi::win32::BrowserNarrow(data).c_str());
     }
-    std::printf("\n%ls\\DynamicIsland-Win\\favicons 里的图标：\n", local.c_str());
+    std::printf("\n%ls\\balance_island\\favicons 里的图标：\n", local.c_str());
     WIN32_FIND_DATAW fd;
-    HANDLE h = ::FindFirstFileW((local + L"\\DynamicIsland-Win\\favicons\\*.png").c_str(), &fd);
+    HANDLE h = ::FindFirstFileW((local + L"\\balance_island\\favicons\\*.png").c_str(), &fd);
     int n = 0;
     if (h != INVALID_HANDLE_VALUE) {
         do {
@@ -83,7 +83,7 @@ void Front() {
     ::GetWindowThreadProcessId(h, &pid);
     wchar_t buf[512] = {0};
     const int n = ::GetWindowTextW(h, buf, 512);
-    const std::string title = diw::win32::BrowserNarrow(std::wstring(buf, static_cast<std::size_t>(n)));
+    const std::string title = bi::win32::BrowserNarrow(std::wstring(buf, static_cast<std::size_t>(n)));
     std::printf("pid  : %lu\n", static_cast<unsigned long>(pid));
     std::printf("title: %s\n", title.c_str());
     std::printf("zoomed: %d\n", ::IsZoomed(h) != 0 ? 1 : 0);
@@ -101,12 +101,12 @@ void Front() {
     std::printf("exe  : %ls\n", exe.c_str());
     const std::size_t slash = exe.find_last_of(L"\\/");
     const std::wstring base = slash == std::wstring::npos ? exe : exe.substr(slash + 1);
-    const diw::win32::BrowserBrand* by_exe = diw::win32::BrowserBrandByExe(base);
-    const diw::win32::BrowserBrand* by_title = diw::win32::BrowserBrandByTitle(title);
+    const bi::win32::BrowserBrand* by_exe = bi::win32::BrowserBrandByExe(base);
+    const bi::win32::BrowserBrand* by_title = bi::win32::BrowserBrandByTitle(title);
     std::printf("brand: exe=%s  title=%s\n", by_exe ? by_exe->id : "-", by_title ? by_title->id : "-");
     if (by_exe != nullptr) {
         std::printf("strip: %s\n",
-                    diw::win32::BrowserStripSuffix(title, by_exe).c_str());
+                    bi::win32::BrowserStripSuffix(title, by_exe).c_str());
     }
 }
 
@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    diw::win32::BrowserWatcher watcher;
+    bi::win32::BrowserWatcher watcher;
     if (!force_brand.empty()) watcher.SetForceBrand(force_brand);
     watcher.SetLogger([](const std::string& line) { std::printf("  log: %s\n", line.c_str()); });
 

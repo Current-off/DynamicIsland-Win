@@ -9,7 +9,7 @@
 
 #include "editor_state.hpp"
 
-using namespace diw;
+using namespace bi;
 
 static int g_run = 0;
 static int g_failed = 0;
@@ -39,10 +39,10 @@ static int g_failed = 0;
 static void TestVsCodeStyle() {
     std::string file, project;
     const EditorBrandDef* brand = nullptr;
-    CHECK(ParseEditorTitle("renderer.hpp \xE2\x80\x94 DynamicIsland-Win \xE2\x80\x94 Trae CN", &file,
+    CHECK(ParseEditorTitle("renderer.hpp \xE2\x80\x94 balance_island \xE2\x80\x94 Trae CN", &file,
                            &project, &brand));
     CHECK_EQ(file, "renderer.hpp");
-    CHECK_EQ(project, "DynamicIsland-Win");
+    CHECK_EQ(project, "balance_island");
     // 不能先 CHECK 再解引用：解析失败时 brand 是空的，CHECK 只会记一条失败，
     // 紧接着的 brand->id 就直接段错误了 —— 连失败点都看不到。
     CHECK(brand != nullptr && std::string(brand->id) == "trae-cn");  // 必须赢过 "Trae"
@@ -142,11 +142,11 @@ static void TestChrome() {
 static void TestBuildState() {
     EditorState st;
     CHECK(BuildEditorState("Trae CN",
-                           "renderer.hpp \xE2\x80\x94 DynamicIsland-Win \xE2\x80\x94 Trae CN", &st));
+                           "renderer.hpp \xE2\x80\x94 balance_island \xE2\x80\x94 Trae CN", &st));
     CHECK_EQ(st.id, "editor:trae-cn");
     CHECK_EQ(st.label, "Trae CN");
     CHECK_EQ(st.file, "renderer.hpp");
-    CHECK_EQ(st.project, "DynamicIsland-Win");
+    CHECK_EQ(st.project, "balance_island");
     CHECK_EQ(st.language, "C++");
 
     // 脏标记

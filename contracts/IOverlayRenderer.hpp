@@ -1,17 +1,17 @@
-// DynamicIsland-Win / IOverlayRenderer.hpp
+// balance_island / IOverlayRenderer.hpp
 // 渲染层抽象：P0 Windhawk tool mod 与 P2 独立 WinUI3/Win32 进程共用此接口。
 //
 // 状态：接口契约（阶段 S3），已通过 MSVC C++17 编译验证。
 // 目标标准：C++17。禁止在本接口引入任何平台头文件，便于核心域保持可测。
-#ifndef DIW_CONTRACTS_I_OVERLAY_RENDERER_HPP
-#define DIW_CONTRACTS_I_OVERLAY_RENDERER_HPP
+#ifndef BI_CONTRACTS_I_OVERLAY_RENDERER_HPP
+#define BI_CONTRACTS_I_OVERLAY_RENDERER_HPP
 
 #include <string>
 #include <vector>
 
 #include "Types.hpp"
 
-namespace diw {
+namespace bi {
 
 class IOverlayRenderer {
 public:
@@ -33,6 +33,6 @@ public:
     virtual void Shutdown() = 0;
 };
 
-}  // namespace diw
+}  // namespace bi
 
-#endif  // DIW_CONTRACTS_I_OVERLAY_RENDERER_HPP
+#endif  // BI_CONTRACTS_I_OVERLAY_RENDERER_HPP

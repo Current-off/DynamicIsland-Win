@@ -43,7 +43,7 @@
         │
 上屏   src/win32/layered_surface.hpp      32bpp DIB + UpdateLayeredWindow（预乘 alpha）
 
-配置   src/win32/rules_io.hpp             %APPDATA%\DynamicIsland-Win\rules.json（mtime 热加载）
+配置   src/win32/rules_io.hpp             %APPDATA%\balance_island\rules.json（mtime 热加载）
 界面   src/win32/settings_ui.hpp          原生 Win32 控件，只读写 RuleConfig
 ```
 

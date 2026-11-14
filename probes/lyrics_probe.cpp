@@ -8,12 +8,12 @@
 
 #include "../../src/win32/lyrics.hpp"
 
-using diw::win32::ExtractFirstNonEmptyJsonString;
-using diw::win32::HttpGetUtf8;
-using diw::win32::ParseLrc;
-using diw::win32::SelectLyricLines;
-using diw::win32::UrlEncodeUtf8;
-using diw::win32::Utf8ToWide;
+using bi::win32::ExtractFirstNonEmptyJsonString;
+using bi::win32::HttpGetUtf8;
+using bi::win32::ParseLrc;
+using bi::win32::SelectLyricLines;
+using bi::win32::UrlEncodeUtf8;
+using bi::win32::Utf8ToWide;
 
 int main(int argc, char** argv) {
     const std::string artist = argc > 1 ? argv[1] : "周杰伦";
