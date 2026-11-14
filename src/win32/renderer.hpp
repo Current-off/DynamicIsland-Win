@@ -37,6 +37,60 @@
 namespace bi {
 namespace win32 {
 
+// ---------------------------------------------------------------- 外观个性化
+//
+// 设置面板里的视觉选项通过这一组全局值作用于渲染层。用「进程级单例 + 每帧同步」
+// 而不是给每个绘制函数加参数：绘制函数有几十个、调用链很深，逐层透传会把
+// 签名改动扩散到整个渲染层，风险远大于收益。所有值都是 POD，读写无需加锁
+//（只在主线程绘制前写一次）。
+struct AppearanceSettings {
+    int theme = 0;           // 0 墨黑 / 1 石墨 / 2 跟随系统（当前两者都保持深色系，保证浅字可读）
+    int ui_scale = 100;      // 80..140，作用于字号
+    int font_offset = 0;     // -2..+4，作用于字号
+    int corner_radius = 0;   // 0 = 范式默认 28，其余 8..40
+    bool accent_enabled = false;
+    int accent_r = 30, accent_g = 138, accent_b = 250;
+};
+inline AppearanceSettings& Appearance() {
+    static AppearanceSettings settings;
+    return settings;
+}
+
+inline bool ParseHexColor(const std::string& text, int* r, int* g, int* b) {
+    if (text.size() != 7 || text[0] != '#') return false;
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    const int v[6] = {nibble(text[1]), nibble(text[2]), nibble(text[3]),
+                      nibble(text[4]), nibble(text[5]), nibble(text[6])};
+    for (int x : v) {
+        if (x < 0) return false;
+    }
+    *r = v[0] * 16 + v[1];
+    *g = v[2] * 16 + v[3];
+    *b = v[4] * 16 + v[5];
+    return true;
+}
+
+inline void ApplyRuleAppearance(int theme, int ui_scale, int font_offset, int corner_radius,
+                                const std::string& accent_hex) {
+    auto& a = Appearance();
+    a.theme = theme;
+    a.ui_scale = (std::clamp)(ui_scale, 80, 140);
+    a.font_offset = (std::clamp)(font_offset, -2, 4);
+    a.corner_radius = corner_radius > 0 ? (std::clamp)(corner_radius, 8, 40) : 0;
+    int r = 0, g = 0, b = 0;
+    a.accent_enabled = ParseHexColor(accent_hex, &r, &g, &b);
+    if (a.accent_enabled) {
+        a.accent_r = r;
+        a.accent_g = g;
+        a.accent_b = b;
+    }
+}
+
 // 渲染层布局常量（像素，96 DPI 基准；实际按 scale 放大）。
 struct Layout {
     static constexpr float kMargin = 16.0f;  // 留给投影的外边距
@@ -517,6 +571,16 @@ private:
     // 强调色按「事件语义」分配，而不是按「哪个功能先做」。
     // 同一类事件在不同位置（主胶囊、分离小胶囊、展开态进度条）必须同色。
     static Gdiplus::Color AccentFor(const std::string& kind) {
+        const auto& look = Appearance();
+        if (look.accent_enabled) {
+            // 用户强调色为主，按活动类型做小幅亮度扰动以保留「一眼分辨类型」的能力。
+            // 不直接覆盖成单色 —— 那会让媒体红、会议红、下载蓝全部变成一个颜色。
+            int bump = 0;
+            for (const char c : kind) bump = (bump * 31 + static_cast<unsigned char>(c)) % 25;
+            bump -= 12;
+            return Gdiplus::Color(255, Clamp8(look.accent_r + bump),
+                                  Clamp8(look.accent_g + bump), Clamp8(look.accent_b + bump));
+        }
         if (kind.rfind("media", 0) == 0) return Gdiplus::Color(255, 250, 60, 96);
         if (kind.rfind("notification", 0) == 0) return Gdiplus::Color(255, 108, 112, 240);
         if (kind.rfind("clipboard", 0) == 0) return Gdiplus::Color(255, 46, 186, 188);
@@ -752,7 +816,10 @@ private:
         // 但展开态涨到 196 后半径变成 98 —— 两端成了半圆，而封面、时间、
         // 页脚提示仍按矩形排布，全都落到圆弧外面，看起来就是「内容越界」。
         // 紧凑/休眠态依然走 Height*0.5（保持药丸），展开态固定 28 逻辑像素。
-        const float radius = std::min(r.Height * 0.5f, 28.0f * scale);
+        const float corner = Appearance().corner_radius > 0
+                                 ? static_cast<float>(Appearance().corner_radius) * scale
+                                 : 28.0f * scale;
+        const float radius = std::min(r.Height * 0.5f, corner);
         Gdiplus::GraphicsPath path;
         AddRounded(path, r, radius);
 
@@ -914,7 +981,10 @@ private:
         const float inset = (std::max)(1.5f, 2.0f * scale);
         const Gdiplus::RectF inner(r.X + inset, r.Y + inset, r.Width - inset * 2.0f,
                                    r.Height - inset * 2.0f);
-        const float radius = (std::max)(0.0f, (std::min)(r.Height * 0.5f, 28.0f * scale) - inset);
+        const float corner = Appearance().corner_radius > 0
+                                 ? static_cast<float>(Appearance().corner_radius) * scale
+                                 : 28.0f * scale;
+        const float radius = (std::max)(0.0f, (std::min)(r.Height * 0.5f, corner) - inset);
         Gdiplus::GraphicsPath hp;
         AddRounded(hp, inner, radius);
         // 亮度刻意不过分（0.46 而不是 0.62）：折射是"光被玻璃弯了一下"，
@@ -940,14 +1010,18 @@ private:
     static void DrawOpaqueBody(Gdiplus::Graphics& g, const Gdiplus::GraphicsPath& path,
                                const Gdiplus::RectF& r, BYTE alpha) {
         const BYTE solid = Clamp8(static_cast<int>(alpha * 0.97f));
-        const Gdiplus::Color base_color(solid, 10, 10, 13);
+        // 主题只调底色深浅，不做「浅底深字」的整体反转：文字颜色在渲染层多处
+        // 硬编码为浅色，局部反转必然出现不可读区域。两档都留足对比度。
+        const BYTE deep = Appearance().theme == 0 ? 10 : 30;
+        const BYTE center = Appearance().theme == 0 ? 36 : 58;
+        const Gdiplus::Color base_color(solid, deep, deep, Clamp8(deep + 3));
 
         Gdiplus::SolidBrush fill(base_color);
         g.FillPath(&fill, &path);
 
         Gdiplus::PathGradientBrush glow(&path);
         glow.SetCenterPoint(Gdiplus::PointF(r.X + r.Width * 0.5f, r.Y + r.Height * 0.24f));
-        glow.SetCenterColor(Gdiplus::Color(solid, 36, 36, 44));
+        glow.SetCenterColor(Gdiplus::Color(solid, center, center, Clamp8(center + 8)));
         glow.SetFocusScales(0.26f, 0.10f);
         const INT points = path.GetPointCount();
         if (points > 0) {
@@ -1511,6 +1585,11 @@ private:
     // 那几个 (13.5px bold, 10.5px regular...)，线性扫描 48 项比哈希更省。
     TextRef TextFor(float size_px, Gdiplus::FontStyle style, Gdiplus::StringAlignment align,
                     FmtUse use) {
+        // 字号偏移 + 整体缩放是唯一入口，所有文字都从这里取 Font，
+        // 因此设置里的两项字号参数能覆盖全界面而不用逐个绘制函数改。
+        const auto& look = Appearance();
+        size_px = (std::max)(6.0f, (size_px + static_cast<float>(look.font_offset)) *
+                                      static_cast<float>(look.ui_scale) / 100.0f);
         const TextKey key{size_px, static_cast<int>(style), static_cast<int>(align), use};
         for (std::size_t i = 0; i < text_cache_.size(); ++i) {
             if (text_cache_[i].key == key) {

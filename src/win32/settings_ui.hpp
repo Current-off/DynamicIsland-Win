@@ -68,6 +68,33 @@ constexpr int kRowH = 46;         // 一行的高度（含上下留白）
 constexpr int kGroupGap = 26;     // 分组之间的距离
 }  // namespace layout
 
+// ---------------------------------------------------------------- 分页与预设数据
+// 四页共用同一个窗口高度与底部按钮：分页只换中间的控件，Tab 与保存按钮不跳动。
+constexpr int kPageCount = 4;
+constexpr int kAccentCount = 6;
+
+// 强调色预设：hex 写进 cfg.accent（#RRGGBB），rgb 直接用于画色块，省去解析。
+struct AccentPreset {
+    const char* hex;
+    BYTE r, g, b;
+};
+static const AccentPreset kAccents[kAccentCount] = {
+    {"#1E8AFA", 30, 138, 250},  // 默认蓝
+    {"#F05858", 240, 88, 88},
+    {"#34C759", 52, 199, 89},
+    {"#FFB020", 255, 176, 32},
+    {"#A66BFF", 166, 107, 255},
+    {"#2AC7C7", 42, 199, 199},
+};
+
+// 各 Segment 的中文标签（纯文字版，沿用 Segment 的圆角槽 + 选中白片画法）。
+static const wchar_t* const kTabLabels[kPageCount] = {L"外观", L"行为", L"性能", L"预设"};
+static const wchar_t* const kThemeLabels[3] = {L"深色", L"浅色", L"跟随系统"};
+static const wchar_t* const kQuietFormLabels[3] = {L"呼吸点", L"细把手", L"完全隐藏"};
+static const wchar_t* const kYieldKeyLabels[3] = {L"Ctrl", L"Alt", L"Shift"};
+static const wchar_t* const kGlassQualityLabels[4] = {L"流畅", L"均衡", L"精细", L"极致"};
+static const wchar_t* const kTargetMonitorLabels[3] = {L"主屏", L"光标所在屏", L"指定序号"};
+
 // ---------------------------------------------------------------- 可点区域
 enum class Hit : int {
     None = 0,
@@ -86,7 +113,33 @@ enum class Hit : int {
     Save,
     Cancel,
     Close,
-    TitleBar
+    TitleBar,
+    // ---- 以下全部追加在枚举末尾 ----
+    // 绝不改动上面 EventBase=100 / Fullscreen=200 那一批显式数值：
+    // 现有点击路由靠它们定位，一动就整体错位。新值从 212 起自动递增，
+    // 与 EventIndex 检查的 100..106 区间也不冲突。
+    // 同组多选控件（Tab / Segment / 色块）的 Hit 必须连续，布局用 base+i 分派。
+    TabAppearance, TabBehavior, TabPerformance, TabPreset,  // 四个分页 Tab
+    // 外观页
+    Theme0, Theme1, Theme2,
+    Accent0, Accent1, Accent2, Accent3, Accent4, Accent5,
+    UiScaleDec, UiScaleInc,
+    FontOffsetDec, FontOffsetInc,
+    CornerDec, CornerInc,
+    TopOffsetDec, TopOffsetInc,
+    // 行为页
+    AutoHideFocus, AutoHidePaused, AutoHideFullscreen,
+    QuietForm0, QuietForm1, QuietForm2,
+    YieldEnabled,
+    YieldKey0, YieldKey1, YieldKey2,
+    ReduceMotion, LowPowerDowngrade,
+    // 性能页
+    GlassQuality0, GlassQuality1, GlassQuality2, GlassQuality3,
+    CaptureRefreshDec, CaptureRefreshInc,
+    TargetMonitor0, TargetMonitor1, TargetMonitor2,
+    MonitorIndexDec, MonitorIndexInc,
+    // 预设页
+    PresetSaveAs, PresetRestore, PresetExport, PresetImport
 };
 
 struct Zone {
@@ -112,6 +165,7 @@ struct State {
     POINT drag_origin{};
     RECT drag_window{};
     std::vector<Zone> zones;
+    int page = 0;  // 当前分页：0 外观 / 1 行为 / 2 性能 / 3 预设
 };
 
 inline int S(int value, int dpi) { return ::MulDiv(value, dpi, 96); }
@@ -302,8 +356,17 @@ inline void Hairline(Gdiplus::Graphics& g, float x0, float x1, float y) {
 
 // 按钮：主按钮是强调色实心，次按钮是浅描边。
 inline void Button(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, const wchar_t* text, bool primary,
-                   bool hover, float scale) {
+                   bool hover, float scale, bool disabled = false) {
     const float radius = rc.Height * 0.5f;
+    if (disabled) {
+        // 禁用态：暗底灰字。调用方不会为它生成命中区，画出来只是如实告知
+        //「这个功能还没启用」，不是留一个点了没反应的假按钮。
+        FillRound(g, rc, radius, Rgba(20, 255, 255, 255));
+        Text(g, text, rc, 12.0f * scale, false,
+             Rgba(90, color::kSubR, color::kSubG, color::kSubB),
+             Gdiplus::StringAlignmentCenter);
+        return;
+    }
     if (primary) {
         FillRound(g, rc, radius,
                   Rgba(static_cast<BYTE>(hover ? 255 : 235), color::kAccentR, color::kAccentG,
@@ -313,6 +376,155 @@ inline void Button(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, const wchar_t
     }
     Text(g, text, rc, 12.0f * scale, primary,
          primary ? Rgba(255, 255, 255, 255) : Rgba(230, color::kTextR, color::kTextG, color::kTextB),
+         Gdiplus::StringAlignmentCenter);
+}
+
+// ---------------------------------------------------------------- 分页辅助
+inline Hit HitAt(Hit base, int i) {
+    return static_cast<Hit>(static_cast<int>(base) + i);
+}
+
+inline Gdiplus::RectF ToRectF(const RECT& r) {
+    return Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
+                          static_cast<float>(r.right - r.left),
+                          static_cast<float>(r.bottom - r.top));
+}
+
+// 布局与命中同一份 zones：绘制按需查矩形，不再另算一套坐标。
+inline const RECT* FindRect(const State& st, Hit h) {
+    for (const auto& z : st.zones) {
+        if (z.hit == h) return &z.rc;
+    }
+    return nullptr;
+}
+
+// 一段多选控件的整体矩形（首尾两段合并）。
+inline Gdiplus::RectF UnionSeg(const State& st, Hit base, int count) {
+    const RECT* a = FindRect(st, base);
+    const RECT* b = FindRect(st, HitAt(base, count - 1));
+    if (a == nullptr || b == nullptr) return Gdiplus::RectF();
+    return Gdiplus::RectF(static_cast<float>(a->left), static_cast<float>(a->top),
+                          static_cast<float>(b->right - a->left),
+                          static_cast<float>(a->bottom - a->top));
+}
+
+// 当前悬停落在第几段（不在该控件上返回 -1）。
+inline int SegHover(const State& st, Hit base, int count) {
+    const int v = static_cast<int>(st.hover);
+    const int b = static_cast<int>(base);
+    return (v >= b && v < b + count) ? v - b : -1;
+}
+
+// 一行的「中文标题 + 一行说明」，以右侧控件的中心垂直对齐。
+inline void DrawRowLabel(Gdiplus::Graphics& g, const RECT& anchor, const wchar_t* title,
+                         const wchar_t* sub, float scale, float pad, float content_w) {
+    const float row_h = 46.0f * scale;
+    const float cy = static_cast<float>(anchor.top + anchor.bottom) * 0.5f;
+    RowText(g, Gdiplus::RectF(pad, cy - row_h * 0.5f, content_w * 0.5f, row_h),
+            title, sub, scale);
+}
+
+// 纯文字版分段选择器：沿用 Segment 的圆角槽 + 选中白片，只是标签由调用方给。
+inline void LabeledSegment(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int count,
+                           int selected, int hover_index, float scale,
+                           const wchar_t* const* labels) {
+    if (count <= 0) return;
+    FillRound(g, rc, rc.Height * 0.5f, Rgba(56, 255, 255, 255));
+    const float gap = 3.0f * scale;
+    const float w = (rc.Width - gap * 2.0f) / static_cast<float>(count);
+    for (int i = 0; i < count; ++i) {
+        const Gdiplus::RectF cell(rc.X + gap + static_cast<float>(i) * w, rc.Y + gap,
+                                  w - gap, rc.Height - gap * 2.0f);
+        const bool on = i == selected;
+        if (on) {
+            FillRound(g, cell, cell.Height * 0.5f, Rgba(255, 255, 255, 255));
+        } else if (i == hover_index) {
+            FillRound(g, cell, cell.Height * 0.5f, Rgba(30, 255, 255, 255));
+        }
+        Text(g, labels[i], cell, 11.5f * scale, on,
+             on ? Rgba(255, 20, 20, 26) : Rgba(225, 255, 255, 255),
+             Gdiplus::StringAlignmentCenter);
+    }
+}
+
+// − [数值] + 的步进器：数值显示在两个按钮之间的空隙。
+inline void DrawStepper(Gdiplus::Graphics& g, const State& st, Hit dec, Hit inc,
+                        const std::wstring& value, float scale) {
+    const RECT* d = FindRect(st, dec);
+    const RECT* i = FindRect(st, inc);
+    if (d == nullptr || i == nullptr) return;
+    const Gdiplus::Color dim = Rgba(255, color::kTextR, color::kTextG, color::kTextB);
+    const Gdiplus::RectF mr = ToRectF(*d);
+    const Gdiplus::RectF pr = ToRectF(*i);
+    FillRound(g, mr, mr.Height * 0.5f,
+              Rgba(static_cast<BYTE>(st.hover == dec ? 70 : 38), 255, 255, 255));
+    Text(g, L"−", mr, 14.0f * scale, false, dim, Gdiplus::StringAlignmentCenter);
+    FillRound(g, pr, pr.Height * 0.5f,
+              Rgba(static_cast<BYTE>(st.hover == inc ? 70 : 38), 255, 255, 255));
+    Text(g, L"+", pr, 14.0f * scale, false, dim, Gdiplus::StringAlignmentCenter);
+    const float vx = static_cast<float>(d->right) + 3.0f * scale;
+    const float vw = static_cast<float>(i->left - d->right) - 6.0f * scale;
+    Text(g, value,
+         Gdiplus::RectF(vx, static_cast<float>(d->top), vw,
+                        static_cast<float>(d->bottom - d->top)),
+         12.0f * scale, true, dim, Gdiplus::StringAlignmentCenter);
+}
+
+// 强调色预设色块：选中时套一圈白环，悬停时轻微提亮。
+inline void DrawAccentSwatches(Gdiplus::Graphics& g, const State& st, float scale) {
+    for (int i = 0; i < kAccentCount; ++i) {
+        const RECT* r = FindRect(st, HitAt(Hit::Accent0, i));
+        if (r == nullptr) continue;
+        const Gdiplus::RectF rc = ToRectF(*r);
+        const bool on = st.cfg.accent == kAccents[i].hex;
+        if (on) {
+            const Gdiplus::RectF ring(rc.X - 3.0f * scale, rc.Y - 3.0f * scale,
+                                      rc.Width + 6.0f * scale, rc.Height + 6.0f * scale);
+            FillRound(g, ring, ring.Height * 0.5f, Rgba(255, 255, 255, 255));
+        } else if (st.hover == HitAt(Hit::Accent0, i)) {
+            const Gdiplus::RectF ring(rc.X - 2.0f * scale, rc.Y - 2.0f * scale,
+                                      rc.Width + 4.0f * scale, rc.Height + 4.0f * scale);
+            FillRound(g, ring, ring.Height * 0.5f, Rgba(70, 255, 255, 255));
+        }
+        FillRound(g, rc, rc.Height * 0.5f,
+                  Rgba(255, kAccents[i].r, kAccents[i].g, kAccents[i].b));
+    }
+}
+
+// 两列开关：整格可点，开关贴在每格右端，与「响应哪些操作」同一手感。
+inline void DrawTwoColToggles(Gdiplus::Graphics& g, const State& st, const Hit* hits,
+                              const wchar_t* const* labels, const wchar_t* const* subs,
+                              const bool* ons, int n, float scale) {
+    for (int k = 0; k < n; ++k) {
+        const RECT* r = FindRect(st, hits[k]);
+        if (r == nullptr) continue;
+        const float tw = 44.0f * scale;
+        const float th = 24.0f * scale;
+        const Gdiplus::RectF tr(
+            static_cast<float>(r->right) - tw,
+            static_cast<float>(r->top) +
+                (static_cast<float>(r->bottom - r->top) - th) * 0.5f,
+            tw, th);
+        const float text_w = static_cast<float>(r->right - r->left) - tw - 12.0f * scale;
+        RowText(g, Gdiplus::RectF(static_cast<float>(r->left), static_cast<float>(r->top),
+                                  text_w, static_cast<float>(r->bottom - r->top)),
+                labels[k], subs[k], scale);
+        Toggle(g, tr, ons[k], st.hover == hits[k], scale);
+    }
+}
+
+// 分页 Tab：选中为强调色实心，悬停为浅底。
+inline void DrawTab(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, const wchar_t* label,
+                    bool selected, bool hover, float scale) {
+    if (selected) {
+        FillRound(g, rc, rc.Height * 0.5f,
+                  Rgba(255, color::kAccentR, color::kAccentG, color::kAccentB));
+    } else if (hover) {
+        FillRound(g, rc, rc.Height * 0.5f, Rgba(34, 255, 255, 255));
+    }
+    Text(g, label, rc, 12.5f * scale, selected,
+         selected ? Rgba(255, 255, 255, 255)
+                  : Rgba(205, color::kTextR, color::kTextG, color::kTextB),
          Gdiplus::StringAlignmentCenter);
 }
 
@@ -327,111 +539,169 @@ inline int BuildZones(State& st, std::vector<Zone>& zones) {
     const int pad = S(layout::kPad, dpi);
     const int width = st.width;
     const int content_w = width - pad * 2;
-    int y = S(layout::kTitleY, dpi);
 
-    // 标题区（同时也是拖动区）
+    // 标题区（同时也是拖动区）与关闭 ×
     zones.push_back({Hit::TitleBar, {0, 0, width, S(84, dpi)}});
     zones.push_back({Hit::Close, {width - pad - S(24, dpi), S(22, dpi), width - pad, S(46, dpi)}});
 
-    y = S(96, dpi);
-    y += S(18, dpi);  // 分组标题占位（绘制时才画字，布局只占高度）
-
-    // ---- 外观 ----
-    const int seg_w = S(300, dpi);
-    const int seg_h = S(34, dpi);
-    const int seg_x = width - pad - seg_w;
-
-    const int opacity_y = y;
-    zones.push_back({Hit::Opacity0, {seg_x, opacity_y, seg_x + seg_w / 3, opacity_y + seg_h}});
-    zones.push_back({Hit::Opacity1,
-                     {seg_x + seg_w / 3, opacity_y, seg_x + seg_w * 2 / 3, opacity_y + seg_h}});
-    zones.push_back({Hit::Opacity2,
-                     {seg_x + seg_w * 2 / 3, opacity_y, seg_x + seg_w, opacity_y + seg_h}});
-    y += S(layout::kRowH + 12, dpi);
-
-    const int anchor_y = y;
-    zones.push_back({Hit::Anchor0, {seg_x, anchor_y, seg_x + seg_w / 3, anchor_y + seg_h}});
-    zones.push_back({Hit::Anchor1,
-                     {seg_x + seg_w / 3, anchor_y, seg_x + seg_w * 2 / 3, anchor_y + seg_h}});
-    zones.push_back({Hit::Anchor2,
-                     {seg_x + seg_w * 2 / 3, anchor_y, seg_x + seg_w, anchor_y + seg_h}});
-    y += S(layout::kRowH + 12, dpi);
-
-    const int glass_y = y;
-    zones.push_back({Hit::Glass, {width - pad - S(48, dpi), glass_y, width - pad,
-                                  glass_y + S(26, dpi)}});
-    y += S(layout::kRowH, dpi);
-
-    y += S(layout::kGroupGap, dpi);
-
-    // ---- 响应哪些操作（两列）----
-    y += S(22, dpi);  // section title
-    const int col_w = content_w / 2;
-    const int row_h = S(38, dpi);
-    for (int i = 0; i < 7; ++i) {
-        const int col = i % 2;
-        const int row = i / 2;
-        const int cy = y + row * row_h;
-        if (col == 0) {
-            zones.push_back({EventHit(i),
-                             {pad, cy, pad + col_w - S(60, dpi), cy + S(26, dpi)}});
-        } else {
-            zones.push_back({EventHit(i),
-                             {pad + col_w, cy, width - pad, cy + S(26, dpi)}});
-        }
+    // 四个分页 Tab：紧贴标题下方，等宽平分内容区。每页重建 zones 时都会重新加入，
+    // 所以 Tab 在四页里始终可点。
+    const int tab_y = S(90, dpi);
+    const int tab_h = S(32, dpi);
+    const int tab_w = content_w / kPageCount;
+    for (int i = 0; i < kPageCount; ++i) {
+        const int x0 = pad + i * tab_w;
+        zones.push_back({HitAt(Hit::TabAppearance, i), {x0, tab_y, x0 + tab_w, tab_y + tab_h}});
     }
-    y += row_h * 4;
-    y += S(layout::kGroupGap, dpi);
 
-    // ---- 其他 ----
-    y += S(22, dpi);
-    const int full_y = y;
-    zones.push_back({Hit::Fullscreen,
-                     {width - pad - S(48, dpi), full_y, width - pad, full_y + S(26, dpi)}});
-    y += S(layout::kRowH, dpi);
+    const int seg_w = S(300, dpi);
+    const int seg_x = width - pad - seg_w;
+    const int seg_h = S(34, dpi);
+    const int row_step = S(46, dpi);  // 单列行步进
+    const int col_h = S(38, dpi);     // 两列行步进
 
-    const int secret_y = y;
-    zones.push_back({Hit::Secret,
-                     {width - pad - S(48, dpi), secret_y, width - pad, secret_y + S(26, dpi)}});
-    y += S(layout::kRowH, dpi);
+    // 一段多选控件：每段一个 zone，整体右对齐宽 seg_w（同组 Hit 连续，base+i 分派）。
+    auto add_segment = [&](Hit base, int count, int yy) {
+        const int cw = seg_w / count;
+        for (int i = 0; i < count; ++i) {
+            zones.push_back({HitAt(base, i),
+                             {seg_x + i * cw, yy, seg_x + (i + 1) * cw, yy + seg_h}});
+        }
+    };
+    // 单个开关：右端 48 宽。
+    auto add_toggle = [&](Hit h, int yy) {
+        const int tw = S(48, dpi);
+        zones.push_back({h, {width - pad - tw, yy, width - pad, yy + S(26, dpi)}});
+    };
+    // − [数值] + 步进器：右对齐，两按钮之间留出数值文本空隙（不可点）。
+    auto add_stepper = [&](Hit dec, Hit inc, int yy) {
+        const int btn = S(26, dpi);
+        const int gap = S(4, dpi);
+        const int text_w = S(56, dpi);
+        const int total = btn * 2 + gap * 2 + text_w;
+        int x = width - pad - total;
+        zones.push_back({dec, {x, yy, x + btn, yy + btn}});
+        x += btn + gap + text_w + gap;
+        zones.push_back({inc, {x, yy, x + btn, yy + btn}});
+    };
+    // 强调色色块：右对齐一排。
+    auto add_swatches = [&](Hit base, int count, int yy) {
+        const int sw = S(30, dpi);
+        const int gap = S(8, dpi);
+        const int total = count * sw + (count - 1) * gap;
+        int x = width - pad - total;
+        for (int i = 0; i < count; ++i) {
+            zones.push_back({HitAt(base, i), {x, yy, x + sw, yy + sw}});
+            x += sw + gap;
+        }
+    };
+    // 两列开关：整格可点，左列右端留 60px 避免两列贴死（与旧版事件区一致）。
+    auto add_two_col = [&](const Hit* hits, int n, int yy, int rh) {
+        const int col_w = content_w / 2;
+        for (int i = 0; i < n; ++i) {
+            const int col = i % 2;
+            const int row = i / 2;
+            const int cy = yy + row * rh;
+            const int left = col == 0 ? pad : pad + col_w;
+            const int right = col == 0 ? pad + col_w - S(60, dpi) : width - pad;
+            zones.push_back({hits[i], {left, cy, right, cy + S(26, dpi)}});
+        }
+        return yy + ((n + 1) / 2) * rh;
+    };
 
-    // 免打扰：第一行是标题 + 开关，第二行才是起止时间。
-    // 挤在一行会变成「开关 − + 到 − +」六个小块贴着，谁也看不出哪个是哪个 ——
-    // 而且时间文字会被 +/- 压成零宽。
-    const int quiet_y = y;
-    const int ctl_right = width - pad;
-    zones.push_back({Hit::QuietOn,
-                     {ctl_right - S(48, dpi), quiet_y, ctl_right, quiet_y + S(26, dpi)}});
-    y += S(30, dpi);
+    int y = S(132, dpi);  // 内容区起点（Tab 下方）
+    switch (st.page) {
+        case 0: {  // ---- 外观：原有「外观」三件 + 六件新控件 ----
+            y += S(20, dpi);  // 「外观」分组标题占位
+            add_segment(Hit::Opacity0, 3, y); y += row_step;
+            add_segment(Hit::Anchor0, 3, y); y += row_step;
+            add_toggle(Hit::Glass, y); y += row_step;
+            add_segment(Hit::Theme0, 3, y); y += row_step;
+            add_swatches(Hit::Accent0, kAccentCount, y); y += row_step;
+            add_stepper(Hit::UiScaleDec, Hit::UiScaleInc, y); y += row_step;
+            add_stepper(Hit::FontOffsetDec, Hit::FontOffsetInc, y); y += row_step;
+            add_stepper(Hit::CornerDec, Hit::CornerInc, y); y += row_step;
+            add_stepper(Hit::TopOffsetDec, Hit::TopOffsetInc, y); y += row_step;
+            break;
+        }
+        case 1: {  // ---- 行为：原有「响应哪些操作」「其他」+ 新自动隐藏/让路控件 ----
+            y += S(20, dpi);  // 「响应哪些操作」分组标题
+            {
+                Hit hits[7];
+                for (int i = 0; i < 7; ++i) hits[i] = EventHit(i);
+                y = add_two_col(hits, 7, y, col_h);
+            }
+            y += S(12, dpi);
+            y += S(20, dpi);  // 「其他」分组标题
+            add_toggle(Hit::Fullscreen, y); y += row_step;
+            add_toggle(Hit::Secret, y); y += row_step;
+            add_toggle(Hit::QuietOn, y); y += S(30, dpi);
+            {
+                // 免打扰起止时间：两段 −/+ 各占一块，中间夹时间文本（不可点）。
+                const int time_y = y;
+                const int tw = S(26, dpi);
+                const int gap = S(4, dpi);
+                const int clock_w = S(58, dpi);
+                int tx = pad;
+                zones.push_back({Hit::QuietFromDec, {tx, time_y, tx + tw, time_y + tw}});
+                tx += tw + gap + clock_w + gap;
+                zones.push_back({Hit::QuietFromInc, {tx, time_y, tx + tw, time_y + tw}});
+                tx += tw + S(22, dpi);  // 「到」
+                zones.push_back({Hit::QuietToDec, {tx, time_y, tx + tw, time_y + tw}});
+                tx += tw + gap + clock_w + gap;
+                zones.push_back({Hit::QuietToInc, {tx, time_y, tx + tw, time_y + tw}});
+                y += S(38, dpi);
+            }
+            zones.push_back({Hit::OpenConfig, {pad, y, pad + S(280, dpi), y + S(32, dpi)}});
+            y += S(46, dpi);
+            y += S(12, dpi);
+            y += S(20, dpi);  // 「自动隐藏与让路」分组标题
+            {
+                static const Hit kHits[6] = {
+                    Hit::AutoHideFocus, Hit::AutoHidePaused, Hit::AutoHideFullscreen,
+                    Hit::YieldEnabled, Hit::ReduceMotion, Hit::LowPowerDowngrade};
+                y = add_two_col(kHits, 6, y, col_h);
+            }
+            add_segment(Hit::QuietForm0, 3, y); y += row_step;
+            add_segment(Hit::YieldKey0, 3, y); y += row_step;
+            break;
+        }
+        case 2: {  // ---- 性能 ----
+            y += S(20, dpi);  // 「性能」分组标题
+            add_segment(Hit::GlassQuality0, 4, y); y += row_step;
+            add_stepper(Hit::CaptureRefreshDec, Hit::CaptureRefreshInc, y); y += row_step;
+            add_segment(Hit::TargetMonitor0, 3, y); y += row_step;
+            add_stepper(Hit::MonitorIndexDec, Hit::MonitorIndexInc, y); y += row_step;
+            break;
+        }
+        case 3: {  // ---- 预设 ----
+            y += S(96, dpi);  // 当前预设名 + 说明（纯文字，不占命中区）
+            const int bw = S(150, dpi);
+            const int bh = S(34, dpi);
+            const int bgap = S(12, dpi);
+            int x = pad;
+            zones.push_back({Hit::PresetSaveAs, {x, y, x + bw, y + bh}});
+            x += bw + bgap;
+            zones.push_back({Hit::PresetRestore, {x, y, x + bw, y + bh}});
+            y += S(46, dpi);
+            // 「导出 / 导入」画成禁用态，不生成命中区 —— 真不可点，不是假按钮。
+            y += S(34, dpi);
+            y += S(26, dpi);  // 「未启用」说明
+            break;
+        }
+        default: break;
+    }
 
-    const int time_y = y;
-    const int tw = S(26, dpi);    // − / + 的边长
-    const int gap = S(4, dpi);
-    int tx = pad;
-    zones.push_back({Hit::QuietFromDec, {tx, time_y, tx + tw, time_y + tw}});
-    tx += tw + gap;
-    const int clock_w = S(58, dpi);
-    tx += clock_w + gap;  // 时间文本占位（不可点）
-    zones.push_back({Hit::QuietFromInc, {tx, time_y, tx + tw, time_y + tw}});
-    tx += tw + S(22, dpi);  // 「到」
-    zones.push_back({Hit::QuietToDec, {tx, time_y, tx + tw, time_y + tw}});
-    tx += tw + gap;
-    tx += clock_w + gap;
-    zones.push_back({Hit::QuietToInc, {tx, time_y, tx + tw, time_y + tw}});
-    y += S(38, dpi);
-
-    // ---- 高级 ----
-    zones.push_back({Hit::OpenConfig, {pad, y, pad + S(280, dpi), y + S(32, dpi)}});
-    y += S(52, dpi);
-
-    // ---- 底部 ----
+    // 底部按钮固定在统一高度：与当前页无关，四页切换时按钮不跳动。
+    // 各页控件都从 y=132 起排，最满的「行为」页也够不到这里，不会重叠。
+    const int bottom_y = S(820, dpi);
     const int btn_h = S(36, dpi);
     zones.push_back({Hit::Cancel,
-                     {width - pad - S(180, dpi), y, width - pad - S(96, dpi), y + btn_h}});
-    zones.push_back({Hit::Save, {width - pad - S(88, dpi), y, width - pad, y + btn_h}});
-    y += btn_h + S(24, dpi);
-
-    return y;
+                     {width - pad - S(180, dpi), bottom_y, width - pad - S(96, dpi),
+                      bottom_y + btn_h}});
+    zones.push_back({Hit::Save,
+                     {width - pad - S(88, dpi), bottom_y, width - pad, bottom_y + btn_h}});
+    return bottom_y + btn_h + S(24, dpi);
 }
 
 // ---------------------------------------------------------------- 绘制
@@ -553,9 +823,9 @@ inline void Paint(State& st, HDC dc, int width, int height) {
                               static_cast<float>(r.bottom - r.top));
     };
 
-    // ---- 外观 ----
-    {
-        const float sy = rc_op0 != nullptr ? static_cast<float>(rc_op0->top) - 24.0f * scale : 0.0f;
+    // ---- 外观（仅外观页：rc_op0 只在 page 0 生成，其余页不画这个标题）----
+    if (rc_op0 != nullptr) {
+        const float sy = static_cast<float>(rc_op0->top) - 24.0f * scale;
         SectionTitle(g, L"外观", pad, sy, scale);
     }
     if (rc_op0 != nullptr) {
@@ -598,16 +868,16 @@ inline void Paint(State& st, HDC dc, int width, int height) {
         Toggle(g, to_f(*rc_glass), st.cfg.glass, st.hover == Hit::Glass, scale);
     }
 
-    // ---- 响应哪些操作 ----
+    // ---- 响应哪些操作（仅行为页：rc_event 只在 page 1 生成）----
     {
-        float sy = 0.0f;
+        const RECT* first = nullptr;
         for (const RECT* r : rc_event) {
-            if (r != nullptr) {
-                sy = static_cast<float>(r->top) - 24.0f * scale;
-                break;
-            }
+            if (r != nullptr) { first = r; break; }
         }
-        SectionTitle(g, L"响应哪些操作", pad, sy, scale);
+        if (first != nullptr) {
+            SectionTitle(g, L"响应哪些操作", pad,
+                         static_cast<float>(first->top) - 24.0f * scale, scale);
+        }
     }
     static const wchar_t* kEventLabel[7] = {
         L"媒体播放", L"消息通知", L"复制 / 截图", L"文件落盘", L"音量变化", L"电源 / 电量", L"设备接入"};
@@ -640,9 +910,9 @@ inline void Paint(State& st, HDC dc, int width, int height) {
         Toggle(g, tr, on, hover, scale);
     }
 
-    // ---- 其他 ----
-    {
-        float sy = rc_full != nullptr ? static_cast<float>(rc_full->top) - 24.0f * scale : 0.0f;
+    // ---- 其他（仅行为页：rc_full 只在 page 1 生成）----
+    if (rc_full != nullptr) {
+        const float sy = static_cast<float>(rc_full->top) - 24.0f * scale;
         SectionTitle(g, L"其他", pad, sy, scale);
     }
     if (rc_full != nullptr) {

@@ -48,6 +48,7 @@
 #include "../core/live_mapping.hpp"
 #include "BalanceRules.hpp"  // 平衡岛范式常量（Ctrl 让路系数等）
 #include "backdrop.hpp"
+#include "glass_async.hpp"   // 异步抓屏：玻璃不再阻塞 UI 线程
 #include "layered_surface.hpp"
 #include "hanzi.hpp"
 #include "ipc_server.hpp"
@@ -78,6 +79,8 @@ using bi::win32::OverviewItem;
 using bi::win32::ParseProgress;
 using bi::win32::Widen;
 using bi::win32::Backdrop;
+using bi::win32::GlassAsync;
+using bi::win32::GlassTexture;
 
 using Clock = std::chrono::steady_clock;
 
@@ -1758,9 +1761,42 @@ int Run() {
         scale = WindowScale(hwnd);
         monitor = MONITORINFO{};
         monitor.cbSize = sizeof(monitor);
-        ::GetMonitorInfoW(::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor);
+        const auto& mon_cfg = rules.Config();
+        HMONITOR target = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (mon_cfg.target_monitor == 0) {
+            // 主屏：虚拟坐标系原点恒在主屏左上角。
+            target = ::MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        } else if (mon_cfg.target_monitor == 1) {
+            POINT cursor{};
+            ::GetCursorPos(&cursor);
+            target = ::MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+        } else {
+            // 指定序号：按 EnumDisplayMonitors 的枚举顺序取第 N 块屏。
+            // 允许负坐标，不用 GetDesktopWindow 矩形（那恒等于主屏）。
+            struct Pick {
+                int seen = 0;
+                int wanted = 0;
+                HMONITOR found = nullptr;
+            } pick;
+            pick.wanted = (std::max)(0, mon_cfg.monitor_index);
+            ::EnumDisplayMonitors(
+                nullptr, nullptr,
+                [](HMONITOR h, HDC, LPRECT, LPARAM data) -> BOOL {
+                    auto* p = reinterpret_cast<Pick*>(data);
+                    if (p->seen++ == p->wanted) {
+                        p->found = h;
+                        return FALSE;
+                    }
+                    return TRUE;
+                },
+                reinterpret_cast<LPARAM>(&pick));
+            if (pick.found != nullptr) target = pick.found;
+        }
+        ::GetMonitorInfoW(target, &monitor);
         screen_cx = (monitor.rcWork.left + monitor.rcWork.right) / 2;
-        screen_top = monitor.rcWork.top + static_cast<int>(6 * scale);
+        // 距工作区顶部的偏移可由用户调（设置 → 外观），下限 4px 保证不贴死屏幕边缘。
+        screen_top = monitor.rcWork.top +
+                     static_cast<int>(std::max(4, rules.Config().top_offset) * scale);
 
         // 直接按整个工作区宽度取，不再「估一个够用的宽度」。
         // 估宽度的版本算错过两次：加小圆时漏了 detached 的宽度，加第 4 个岛时
@@ -1944,13 +1980,16 @@ int Run() {
     }
     const bool has_fixture = !lyric_fixture.empty();
 
-    Backdrop glass_epoch;       // 胶囊不可见时截的干净背景
-    Backdrop glass_refresh;     // 可见期间的定期刷新（用 epoch 修补胶囊挡住的区域）
-    Backdrop* glass_current = nullptr;  // 渲染当前用的那份
+    // 玻璃纹理改由**后台线程**产出：work_/epoch_ 都在 GlassAsync 里，
+    // 主线程只保留一份已合成的纹理和一个轻量探测器。
+    GlassAsync glass_async;
+    GlassTexture glass_tex;
+    Backdrop glass_probe;      // 只在主线程做 32×8 缩略内容探测，不抓全屏
+    bool glass_ready = false;  // 是否已有可用纹理
     std::int64_t glass_last_ms = -100000;
-    // 上一次「抓屏 + 缩放 + 模糊」的耗时。它**同步阻塞在主线程**上，
-    // 是"卡一下"的头号嫌疑（笔记本 150% 缩放时捕获面积是 2.25 倍）。
-    // 既写进日志，也用来把刷新间隔往后推。
+    // 后台最近一次「抓屏 + 缩放 + 模糊」的耗时（现在**不阻塞主线程**）。
+    // 仍写进日志，也用来把刷新间隔往后推 —— 笔记本上单次可能上百毫秒，
+    // 即便不卡 UI，也没必要让后台线程一直空转。
     double glass_cost_ms = 0.0;
     // 画布尺寸最近一次变化的时间。动画期间尺寸每帧都在变，
     // 而 epoch 的触发条件是「尺寸变了」——不加防抖就等于每帧重抓一次全屏。
@@ -2055,6 +2094,15 @@ int Run() {
     // 平衡岛范式 §4「让路」：按住 Ctrl 时窗口鼠标穿透并降透明，
     // 把「是否遮挡」的决定权交回用户，而不是让用户去设置里翻开关。
     bool yield_active = false;
+    // 主线程单帧工作耗时探针：每 2 秒输出一次窗口内最大值。
+    // 这是判断「抓屏是否还在阻塞 UI」的硬指标 —— 改异步之前，
+    // 每 2 秒必然出现一次 30~100ms 的尖峰；改后应稳定在绘制成本量级。
+    double max_ui_work_ms = 0.0;
+    std::int64_t perf_window_ms = 0;
+    // 「光标所在屏」模式下跨屏移动要重算几何，500ms 节流避免每帧枚举显示器。
+    ULONGLONG last_monitor_poll_tick = 0;
+    HMONITOR last_cursor_monitor = nullptr;
+    glass_async.Start();
 
     while (!g_quit) {
         MSG msg;
@@ -2068,11 +2116,42 @@ int Run() {
         }
         if (g_quit) break;
 
+        // 把设置里的视觉项同步给渲染层（每帧一次，全是 POD 赋值 + 7 字符解析）。
+        // 放在绘制之前，保证主题/强调色/字号/圆角的改动即时可见，无需重启。
+        const auto& look_cfg = rules.Config();
+        bi::win32::ApplyRuleAppearance(look_cfg.theme, look_cfg.ui_scale,
+                                       look_cfg.font_offset, look_cfg.corner_radius,
+                                       look_cfg.accent);
+
+        // 目标显示器 = 光标所在屏时，跨屏移动要重算工作区与 DPI。
+        // 只在该模式下轮询，且 500ms 一次；变化时才置 g_display_changed。
+        if (look_cfg.target_monitor == 1) {
+            const ULONGLONG tick = ::GetTickCount64();
+            if (tick - last_monitor_poll_tick >= 500) {
+                last_monitor_poll_tick = tick;
+                POINT cursor{};
+                if (::GetCursorPos(&cursor)) {
+                    const HMONITOR current =
+                        ::MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+                    if (current != last_cursor_monitor) {
+                        last_cursor_monitor = current;
+                        g_display_changed = true;
+                    }
+                }
+            }
+        }
+
         // ---- 让路（docs/PARADIGM.md §4）----
+        // 让路键可在设置里选 Ctrl / Alt / Shift，也可整体关闭。
         // GetAsyncKeyState 读的是**全局物理键状态**：窗口穿透、失去焦点之后
-        // 依然能检测到 Ctrl 松开，这正是选它而不是 WM_KEYDOWN 的原因
+        // 依然能检测到松开，这正是选它而不是 WM_KEYDOWN 的原因
         //（WM_KEYDOWN 在穿透后就再也收不到了，会让岛卡在让路态）。
-        const bool want_yield = (::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        const auto& yield_cfg = rules.Config();
+        const int yield_vk = yield_cfg.yield_key == 1
+                                 ? VK_MENU
+                                 : (yield_cfg.yield_key == 2 ? VK_SHIFT : VK_CONTROL);
+        const bool want_yield =
+            yield_cfg.yield_enabled && (::GetAsyncKeyState(yield_vk) & 0x8000) != 0;
         if (want_yield != yield_active) {
             yield_active = want_yield;
             const LONG ex = ::GetWindowLongW(hwnd, GWL_EXSTYLE);
@@ -2099,7 +2178,8 @@ int Run() {
         if (g_display_changed) {
             g_display_changed = false;
             relayout();
-            glass_current = nullptr;  // 旧纹理尺寸/位置可能不再匹配，重截前回落不透明
+            glass_ready = false;      // 旧纹理尺寸/位置可能不再匹配，重截前回落不透明
+            glass_tex.Clear();
             was_hidden = true;        // 下一帧按新几何截干净 epoch
             note("display change: re-layout scale=" + std::to_string(scale) +
                  " workarea=" + std::to_string(monitor.rcWork.right - monitor.rcWork.left) + "x" +
@@ -2367,11 +2447,23 @@ int Run() {
         }
         auto is_sleeping = [&](const Frame& f) {
             if (!has_island(f)) return false;
-            if (demo.suspended) return true;  // 全屏 / 避让
+            const auto& sleep_cfg = rules.Config();
+            // 「全屏时收成一条」现在是可关的独立开关（设置 → 行为）。
+            if (demo.suspended && sleep_cfg.auto_hide_fullscreen) return true;
+            // 「暂停播放后自动隐藏」：只有确实存在媒体会话且已暂停时才收起，
+            // 不能把「根本没在放歌」当成暂停，否则岛会永远隐藏。
+            // 这里直接取一次采集快照：snap 是日志段的局部变量，作用域不覆盖此处。
+            if (sleep_cfg.auto_hide_paused) {
+                const auto media_now = sources.Get();
+                if (media_now.media.present && !media_now.media.playing) return true;
+            }
+            // 「焦点离开时收起」：桌面岛从不持有焦点，用「5 秒无交互」作为
+            // 可观测的等价条件，而不是拿 GetForegroundWindow 跟自己比（那会恒真）。
+            if (sleep_cfg.auto_hide_focus && now_ms - last_interaction_ms >= 5000) return true;
             const std::int64_t auto_ms =
                 opt.auto_sleep_after_ms > 0
                     ? opt.auto_sleep_after_ms
-                    : static_cast<std::int64_t>(rules.Config().auto_sleep_sec) * 1000;
+                    : static_cast<std::int64_t>(sleep_cfg.auto_sleep_sec) * 1000;
             return auto_ms > 0 && now_ms - last_interaction_ms >= auto_ms;
         };
 
@@ -2840,8 +2932,11 @@ int Run() {
 
         // 「没有岛」才算隐藏；有岛但睡着只是收成一条细条。
         // 配置关掉 sleep_bar 时，睡着就等于完全隐藏（给「全屏时什么都别显示」的人留的口子）。
+        // 安静态形态（设置 → 行为）：0 呼吸点 / 1 只留细把手 / 2 完全隐藏。
+        // qf=2 时连休眠把手也不画，给「屏幕上什么都别留」的人一个真正的退路。
+        const int quiet_form = std::clamp(rules.Config().quiet_form, 0, 2);
         const bool want_sleep = is_sleeping(frame);
-        const bool bar_enabled = rules.Config().sleep_bar;
+        const bool bar_enabled = rules.Config().sleep_bar && quiet_form != 2;
         const bool sleeping = want_sleep && bar_enabled;
         const bool hidden = !has_island(frame) || (want_sleep && !bar_enabled);
 
@@ -2850,7 +2945,7 @@ int Run() {
         // "没事可显示"和"程序已经退了"——这是实机试用里最直接的困惑。
         // 跟随 sleep_bar 开关：明确关掉"待机提示"的人，同样不希望屏幕上留一个点。
         // 具体的尺寸覆盖在 view 构建之后做（view 在这里还没声明）。
-        const bool alive_dot = hidden && bar_enabled;
+        const bool alive_dot = hidden && bar_enabled && quiet_form == 0;
         // 入睡时把展开 / 一览收掉：醒来应该是紧凑态，而不是「一睁眼就是半个屏幕」。
         if (sleeping != was_sleeping) {
             if (sleeping) {
@@ -2882,7 +2977,17 @@ int Run() {
                       rules.Config().simplify_chinese, demo.expand_id);
         // 外观两档直接来自用户配置：透明度决定本体怎么画（透/玻璃/实心），
         // 位置在 anchor_x() 里决定窗口停在哪。
-        view.opacity_mode = g_force_opacity >= 0 ? g_force_opacity : rules.Config().opacity;
+        // 电池供电且开启「省电降级」时，液态玻璃降为不透明：
+        // 抓屏/模糊是本项目最贵的一步，未插电时没必要为质感烧电。
+        // 直接查系统电源状态（每帧一次系统调用，代价可忽略），不依赖采集快照的作用域。
+        SYSTEM_POWER_STATUS power_status{};
+        const bool on_battery =
+            ::GetSystemPowerStatus(&power_status) && power_status.ACLineStatus == 0;
+        int opacity_mode = g_force_opacity >= 0 ? g_force_opacity : rules.Config().opacity;
+        if (rules.Config().low_power_downgrade && on_battery && opacity_mode == 0) {
+            opacity_mode = 2;
+        }
+        view.opacity_mode = opacity_mode;
         // 采集层的真实进度（>=0 才代表这个源有时长）。必须在这里取：
         // 下面的拖动预览会覆盖 view.progress，用被覆盖后的值判断会把
         // 「正在拖」误判成「有时长」，松手后命中区来不及失效。
@@ -2953,9 +3058,12 @@ int Run() {
             view.content_h = Layout::kSleepBarH;
         }
         const bool want_visible = !hidden || view.sleep_bar || alive_dot;
+        // 减少动效：让弹簧在一帧内跑完（0.12s 子步进一次到位），
+        // 用户看不到位移动画，但状态切换仍然完整、不会卡在中间态。
+        const double anim_dt = rules.Config().reduce_motion ? 0.12 : std::min(dt, 0.1);
         const bool anim_moved =
             anim.Approach(view.content_w, view.content_h, view.detached_w,
-                          want_visible ? 1.0 : 0.0, std::min(dt, 0.1));
+                          want_visible ? 1.0 : 0.0, anim_dt);
 
         if (anim.alpha > 0.004) {
             hidden_presented = false;
@@ -3037,102 +3145,105 @@ int Run() {
             // 休眠把手用纯色半透明，不需要背景模糊：省掉每 2s 一次的抓屏。
             const bool glass_on = rules.Config().glass && !view.sleep_bar;
             if (glass_on) {
-                // 画布尺寸变了（2 个岛变 3 个、展开/收起）也必须重拍 epoch：
-                // 旧 epoch 的覆盖范围是上一次的窗口大小，修补当前更大的窗口时
-                // 右侧贴不到干净像素，只能拿抓屏结果顶上 —— 那里面有胶囊自己，
-                // 表现为「一半玻璃、一半漆黑」。实测就是这么发现的。
+                // ① 收后台结果（非阻塞）。没有新结果就继续用上一张纹理 ——
+                //    这正是「不跟手」消失的原因：抓屏再慢也不占 UI 线程。
+                Backdrop::Snapshot snap;
+                if (glass_async.TryTake(&snap)) {
+                    glass_cost_ms = snap.cost_ms;
+                    char gline[280];
+                    if (snap.ok) {
+                        glass_tex.Adopt(snap);
+                        glass_ready = true;
+                        std::snprintf(gline, sizeof(gline),
+                                      "glass: %dx%d at (%d,%d) raw=%.1f blur=%.1f cost=%.1fms (async)",
+                                      snap.full_w, snap.full_h, snap.x, snap.y,
+                                      snap.raw_lum, snap.blur_lum, snap.cost_ms);
+                    } else {
+                        // 失败也要记耗时：只记成功样本会系统性低估最坏情况。
+                        // 失败时沿用旧纹理，不回退不透明 —— 玻璃闪一下反而更晃眼。
+                        std::snprintf(gline, sizeof(gline),
+                                      "glass: FAILED cost=%.1fms（无桌面会话/抓屏被拒，沿用旧纹理）",
+                                      snap.cost_ms);
+                    }
+                    note(gline);
+                }
+
+                // ② 判定逻辑与之前一致（epoch 防抖 + 自适应间隔 + 静止桌面跳过），
+                //    但现在只决定是否**提交**一次后台请求，不在 UI 线程执行。
+                // 画布尺寸变了必须重拍 epoch：旧 epoch 覆盖不到更大的窗口，
+                // 修补区右侧会露出「抓到了胶囊自己」的黑块。
                 const bool size_changed = canvas_w != glass_canvas_w || canvas_h != glass_canvas_h;
                 if (size_changed) size_changed_ms = now_ms;
-                // epoch 必须**等几何稳定**再抓，不能「一变就抓」。
-                // 展开/收起是弹簧动画，canvas 尺寸每帧都不同；按「变了就抓」
-                // 实测 8 秒触发 37 次（issue #1 实测笔记本上 27 次 × 约 100ms
-                // = 三分之一墙钟时间阻塞在抓屏上），表现就是整段动画不跟手。
-                // 稳定 300ms 后抓一次，期间继续用旧纹理（按位置采样，只是
-                // 边缘可能露出一点旧内容，远好过每帧卡 100ms）。
+                // 展开/收起是弹簧动画，尺寸每帧都不同；等几何稳定 300ms 再抓，
+                // 期间沿用旧纹理（边缘可能露一点旧内容，好过每帧重抓）。
                 const bool geometry_settled = (now_ms - size_changed_ms) >= 300;
-                // 兜底：尺寸若持续不稳（某种一直在变的动画），防抖会永远等不到，
-                // 玻璃就一直是旧的。超过 2 秒就强制抓一次，宁可卡一下。
+                // 兜底：尺寸持续不稳超过 2 秒强制抓一次，避免永远等不到。
                 const bool force_epoch = (now_ms - glass_last_ms) >= 2000 && size_changed;
-                const bool need_epoch = (glass_current == nullptr) ||
+                const bool need_epoch = (!glass_ready) ||
                                         ((was_hidden || size_changed) &&
                                          (geometry_settled || force_epoch));
-                // 抓屏是同步阻塞：一次 200ms 就够难看了，别雷打不动每 2 秒来一次。
-                // 代价超过 60ms 时按比例拉长间隔（上限 8 秒）—— 玻璃旧一点，
-                // 好过周期性冻结。
+                // 刷新间隔与玻璃质量都由用户在「设置 → 性能」里调。
+                // 质量档映射为倍率：流畅档拉长间隔（少抓屏、更省电），
+                // 精细/极致档缩短；单次后台耗时的自适应退避仍保留。
+                const auto& perf_cfg = rules.Config();
+                const double kQualityScale[] = {2.0, 1.0, 0.7, 0.5};
+                const double base_ms =
+                    static_cast<double>(std::clamp(perf_cfg.capture_refresh_ms, 500, 8000)) *
+                    kQualityScale[std::clamp(perf_cfg.glass_quality, 0, 3)];
                 const std::int64_t glass_interval = static_cast<std::int64_t>(
-                    std::clamp(2000.0 + glass_cost_ms * 12.0, 2000.0, 8000.0));
+                    std::clamp(base_ms + glass_cost_ms * 12.0, 500.0, 8000.0));
                 const bool refresh_due = !need_epoch && now_ms - glass_last_ms >= glass_interval;
-                // 静止桌面不必重抓：先用 32×8 缩略采样算内容指纹，
-                // 没变就跳过 2.3M 像素 BitBlt + 降采样 + 3 趟模糊
-                //（issue #1 报告「桌面几乎没变却反复全屏抓屏」那条；
-                //  同类项目 NotchPeninsula 也用内容哈希做到静止零开销）。
+                // 静止桌面不必重抓：32×8 缩略采样算内容指纹，没变就跳过整个后台任务。
                 const bool need_refresh =
-                    refresh_due && glass_refresh.ContentChanged(glass_x, glass_y, glass_w, glass_h);
+                    refresh_due && glass_probe.ContentChanged(glass_x, glass_y, glass_w, glass_h);
                 if (refresh_due && !need_refresh) {
                     glass_last_ms = now_ms;  // 没抓也要推进计时，否则每帧都会探测
                     note("glass: skipped (unchanged desktop)");
                 }
-                if (need_epoch || need_refresh) {
-                    const auto glass_t0 = Clock::now();
-                    // 修补矩形按「当前实际窗口」算：可见期间刷新时，胶囊自己
-                    // 会出现在抓屏结果里，必须用 epoch 的干净像素把它抹掉。
-                    const int win_x = anchor_x(canvas_w);
-                    Backdrop* target = need_epoch ? &glass_epoch : &glass_refresh;
-                    // 修补区比画布再向外扩一圈：正好卡在画布边界上的话，
-                    // 模糊后边界两边会差半个像素，界面上就是一条竖直的浅色拼接线
-                    // （Agent 面板右边缘实测能看到）。扩出去之后边界落在看不见的地方。
+
+                // ③ 只提交请求。Busy() 防止后台还没算完时堆积过期请求 ——
+                //    玻璃是「越新越好」的数据，排队只会把旧帧一张张送到屏幕上。
+                if ((need_epoch || need_refresh) && !glass_async.Busy()) {
+                    GlassAsync::Request req;
+                    req.x = glass_x;
+                    req.y = glass_y;
+                    req.w = glass_w;
+                    req.h = glass_h;
+                    req.epoch = need_epoch;
+                    // 修补矩形按当前实际窗口算：可见期间刷新时胶囊自己会被截进去，
+                    // 必须用 epoch 的干净像素抹掉。向外扩一圈避免边界出现拼接线。
                     const int patch_pad = static_cast<int>(std::lround(Layout::kMargin * scale));
-                    const bool ok =
-                        target->Capture(glass_x, glass_y, glass_w, glass_h,
-                                        win_x - glass_x - patch_pad, screen_top - glass_y - patch_pad,
-                                        canvas_w + patch_pad * 2, canvas_h + patch_pad * 2,
-                                        need_epoch ? nullptr : &glass_epoch);
-                    glass_last_ms = now_ms;  // 失败也别每帧重试，下次整点再试
-                    glass_cost_ms =
-                        std::chrono::duration<double, std::milli>(Clock::now() - glass_t0).count();
-                    if (ok) {
-                        glass_current = target;
-                        glass_canvas_w = canvas_w;
-                        glass_canvas_h = canvas_h;
-                        char gline[280];
-                        std::snprintf(gline, sizeof(gline),
-                                      "glass: %s %dx%d at (%d,%d) raw=%.1f blur=%.1f cost=%.1fms",
-                                      need_epoch ? "epoch" : "refresh", glass_w, glass_h, glass_x,
-                                      glass_y, target->MeanLuminanceRaw(), target->MeanLuminance(),
-                                      glass_cost_ms);
-                        note(gline);
-                    } else {
-                        // 失败也要记耗时与原因：只记成功样本会**系统性低估最坏情况**
-                        // （抓屏被拒时一样会阻塞，只是没产出纹理）。
-                        char gline[160];
-                        std::snprintf(gline, sizeof(gline),
-                                      "glass: %s FAILED %dx%d cost=%.1fms（无桌面会话/抓屏被拒）",
-                                      need_epoch ? "epoch" : "refresh", glass_w, glass_h,
-                                      glass_cost_ms);
-                        note(gline);
-                        if (need_epoch) glass_current = nullptr;  // 回落不透明样式
-                    }
+                    req.occlude_x = anchor_x(canvas_w) - glass_x - patch_pad;
+                    req.occlude_y = screen_top - glass_y - patch_pad;
+                    req.occlude_w = canvas_w + patch_pad * 2;
+                    req.occlude_h = canvas_h + patch_pad * 2;
+                    glass_async.Submit(req);
+                    glass_last_ms = now_ms;
+                    // 记录的是**请求时**的画布尺寸，结果回来时尺寸可能又变了。
+                    glass_canvas_w = canvas_w;
+                    glass_canvas_h = canvas_h;
+                    note(need_epoch ? "glass: epoch submitted (async)"
+                                    : "glass: refresh submitted (async)");
                 }
             } else {
-                glass_current = nullptr;
+                glass_ready = false;
+                glass_tex.Clear();
             }
             was_hidden = false;
 
             GlassParams glass;
-            if (glass_current != nullptr) {
+            if (glass_ready && glass_tex.Ready()) {
                 // 液态玻璃要「轻模糊 + 保色」的那份纹理：重模糊 + 去饱和会把它
                 // 变成一块均匀灰板，无论再怎么调染色都救不回来。
-                Gdiplus::Bitmap* bm = drawn.opacity_mode == 0 ? glass_current->Liquid()
-                                                              : glass_current->Blurred();
+                Gdiplus::Bitmap* bm = drawn.opacity_mode == 0 ? glass_tex.Liquid()
+                                                               : glass_tex.Blurred();
                 if (bm != nullptr) {
                     glass.backdrop = bm;
-                    // win_x 是上面那个 if 块里的局部量，这里已经出作用域了。
                     // anchor_x 是纯函数（同一宽度必然同一个结果），重算一次更清楚。
-                    glass.offset_x =
-                        static_cast<float>(glass_current->X() - anchor_x(canvas_w));
-                    glass.offset_y = static_cast<float>(glass_current->Y() - screen_top);
-                    glass.full_w = static_cast<float>(glass_current->FullWidth());
-                    glass.full_h = static_cast<float>(glass_current->FullHeight());
+                    glass.offset_x = static_cast<float>(glass_tex.X() - anchor_x(canvas_w));
+                    glass.offset_y = static_cast<float>(glass_tex.Y() - screen_top);
+                    glass.full_w = static_cast<float>(glass_tex.FullWidth());
+                    glass.full_h = static_cast<float>(glass_tex.FullHeight());
                 }
             }
 
@@ -3255,6 +3366,15 @@ int Run() {
             frame_budget = 1.0 / 60.0;
         }
         const double used = std::chrono::duration<double>(Clock::now() - now).count();
+        max_ui_work_ms = std::max(max_ui_work_ms, used * 1000.0);
+        if (now_ms - perf_window_ms >= 2000) {
+            char pline[160];
+            std::snprintf(pline, sizeof(pline), "perf: max_ui_work=%.1fms (2s window)",
+                          max_ui_work_ms);
+            note(pline);
+            max_ui_work_ms = 0.0;
+            perf_window_ms = now_ms;
+        }
         if (used < frame_budget) {
             ::Sleep(static_cast<DWORD>((frame_budget - used) * 1000.0));
         }
@@ -3263,6 +3383,9 @@ int Run() {
     // 先停采集线程再收尾：它还在调 WinRT / COM，进程直接退会留下悬挂的异步操作。
     g_sources = nullptr;
     sources.Stop();
+    // 抓屏线程必须在 GDI+ / COM 收尾之前停掉；它可能在 BitBlt 中，
+    // 但不会阻塞式等待客户端，join 最多等一次抓屏的时间。
+    glass_async.Stop();
 
     // 托盘图标必须在进程退出前主动删除，否则会在托盘区留一个"幽灵图标"，
     // 直到用户把鼠标划过去才消失。

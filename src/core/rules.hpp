@@ -198,6 +198,29 @@ struct RuleConfig {
     // 本机实测：直连会优先 IPv6 而超时（12002），只有代理能出网，所以要给显式入口。
     std::string lyrics_proxy;
 
+    // ---- 个性化设置（设置面板「外观 / 行为 / 性能 / 预设」四页）----
+    // 全部平铺在 RuleConfig 上。FromJson 一律「带默认值读取」：旧 rules.json
+    // 缺这些键时会被填成默认值，绝不因为升级让用户已有配置整份回退。
+    int theme = 0;                    // 0 深色 / 1 浅色 / 2 跟随系统
+    std::string accent = "#1E8AFA";  // 强调色 #RRGGBB
+    int ui_scale = 100;               // 界面缩放 80..140（%）
+    int font_offset = 0;              // 字号偏移 -2..+4
+    int corner_radius = 0;            // 0 = 用范式默认 28，其余 8..40
+    int top_offset = 4;               // 距工作区顶部 px，0..64
+    bool auto_hide_focus = false;     // 焦点离开时自动隐藏
+    bool auto_hide_paused = false;    // 暂停播放后自动隐藏
+    bool auto_hide_fullscreen = true; // 全屏时自动隐藏
+    int quiet_form = 0;               // 安静态形态：0 呼吸点 / 1 细把手 / 2 完全隐藏
+    bool yield_enabled = true;        // 按住让路键临时让路
+    int yield_key = 0;                // 让路键：0 Ctrl / 1 Alt / 2 Shift
+    bool reduce_motion = false;       // 减少动效
+    bool low_power_downgrade = true;  // 省电时自动降级效果
+    int glass_quality = 1;            // 玻璃质量：0 流畅 / 1 均衡 / 2 精细 / 3 极致
+    int capture_refresh_ms = 2000;    // 抓屏刷新间隔 500..8000
+    int target_monitor = 0;           // 目标显示器：0 主屏 / 1 光标所在屏 / 2 指定序号
+    int monitor_index = 0;            // 指定显示器序号（target_monitor=2 时生效）
+    std::string preset_name = "默认"; // 当前预设名
+
     static RuleConfig Defaults() { return RuleConfig(); }
 
     bool EventEnabled(const std::string& kind) const {
@@ -281,7 +304,31 @@ struct RuleConfig {
         //（局域网代理串很常见）就会产出非法 JSON，下次启动 Parse 失败 → 整份回退
         // 默认 → 用户所有设置丢失（issue #2 第 6 条）。
         // json::Quote **自带两侧引号**，这里不能再包一层（否则是 ""...""）。
-        out += "  \"lyrics_proxy\": " + json::Quote(lyrics_proxy) + "\n";
+        out += "  \"lyrics_proxy\": " + json::Quote(lyrics_proxy) + ",\n";
+        // 下面两个字符串字段（accent / preset_name）同样必须走 Quote：
+        // 强调色可能被用户手改成带反斜杠的坏值，预设名可以含中文 / 引号 / 反斜杠，
+        // 直接拼 "..." 会产出非法 JSON，导致整份配置回退默认。
+        out += "  \"theme\": " + std::to_string(theme) + ",\n";
+        out += "  \"accent\": " + json::Quote(accent) + ",\n";
+        out += "  \"ui_scale\": " + std::to_string(ui_scale) + ",\n";
+        out += "  \"font_offset\": " + std::to_string(font_offset) + ",\n";
+        out += "  \"corner_radius\": " + std::to_string(corner_radius) + ",\n";
+        out += "  \"top_offset\": " + std::to_string(top_offset) + ",\n";
+        out += std::string("  \"auto_hide_focus\": ") + (auto_hide_focus ? "true" : "false") + ",\n";
+        out += std::string("  \"auto_hide_paused\": ") + (auto_hide_paused ? "true" : "false") + ",\n";
+        out += std::string("  \"auto_hide_fullscreen\": ") +
+               (auto_hide_fullscreen ? "true" : "false") + ",\n";
+        out += "  \"quiet_form\": " + std::to_string(quiet_form) + ",\n";
+        out += std::string("  \"yield_enabled\": ") + (yield_enabled ? "true" : "false") + ",\n";
+        out += "  \"yield_key\": " + std::to_string(yield_key) + ",\n";
+        out += std::string("  \"reduce_motion\": ") + (reduce_motion ? "true" : "false") + ",\n";
+        out += std::string("  \"low_power_downgrade\": ") +
+               (low_power_downgrade ? "true" : "false") + ",\n";
+        out += "  \"glass_quality\": " + std::to_string(glass_quality) + ",\n";
+        out += "  \"capture_refresh_ms\": " + std::to_string(capture_refresh_ms) + ",\n";
+        out += "  \"target_monitor\": " + std::to_string(target_monitor) + ",\n";
+        out += "  \"monitor_index\": " + std::to_string(monitor_index) + ",\n";
+        out += "  \"preset_name\": " + json::Quote(preset_name) + "\n";
         out += "}\n";
         return out;
     }
@@ -349,6 +396,36 @@ struct RuleConfig {
         if (agent_idle >= 30 && agent_idle <= 7200) cfg.agent_idle_sec = agent_idle;
         cfg.simplify_chinese = root.At("simplify_chinese").AsBool(cfg.simplify_chinese);
         cfg.lyrics_proxy = root.At("lyrics_proxy").AsString(cfg.lyrics_proxy);
+
+        // ---- 个性化字段：全部带默认值读取（旧配置缺键时保持默认）----
+        auto clamp_int = [](int v, int lo, int hi) {
+            return v < lo ? lo : (v > hi ? hi : v);
+        };
+        cfg.theme = clamp_int(root.At("theme").AsInt(cfg.theme), 0, 2);
+        cfg.accent = root.At("accent").AsString(cfg.accent);
+        cfg.ui_scale = clamp_int(root.At("ui_scale").AsInt(cfg.ui_scale), 80, 140);
+        cfg.font_offset = clamp_int(root.At("font_offset").AsInt(cfg.font_offset), -2, 4);
+        {
+            // 0 = 用范式默认 28，其余合法值 8..40；夹不到合法集的越界值一律归 0。
+            const int cr = root.At("corner_radius").AsInt(cfg.corner_radius);
+            if (cr == 0 || cr < 0 || (cr > 0 && cr < 8)) cfg.corner_radius = 0;
+            else cfg.corner_radius = clamp_int(cr, 8, 40);
+        }
+        cfg.top_offset = clamp_int(root.At("top_offset").AsInt(cfg.top_offset), 0, 64);
+        cfg.auto_hide_focus = root.At("auto_hide_focus").AsBool(cfg.auto_hide_focus);
+        cfg.auto_hide_paused = root.At("auto_hide_paused").AsBool(cfg.auto_hide_paused);
+        cfg.auto_hide_fullscreen = root.At("auto_hide_fullscreen").AsBool(cfg.auto_hide_fullscreen);
+        cfg.quiet_form = clamp_int(root.At("quiet_form").AsInt(cfg.quiet_form), 0, 2);
+        cfg.yield_enabled = root.At("yield_enabled").AsBool(cfg.yield_enabled);
+        cfg.yield_key = clamp_int(root.At("yield_key").AsInt(cfg.yield_key), 0, 2);
+        cfg.reduce_motion = root.At("reduce_motion").AsBool(cfg.reduce_motion);
+        cfg.low_power_downgrade = root.At("low_power_downgrade").AsBool(cfg.low_power_downgrade);
+        cfg.glass_quality = clamp_int(root.At("glass_quality").AsInt(cfg.glass_quality), 0, 3);
+        cfg.capture_refresh_ms =
+            clamp_int(root.At("capture_refresh_ms").AsInt(cfg.capture_refresh_ms), 500, 8000);
+        cfg.target_monitor = clamp_int(root.At("target_monitor").AsInt(cfg.target_monitor), 0, 2);
+        cfg.monitor_index = clamp_int(root.At("monitor_index").AsInt(cfg.monitor_index), 0, 15);
+        cfg.preset_name = root.At("preset_name").AsString(cfg.preset_name);
         return cfg;
     }
 

@@ -569,6 +569,134 @@ void TestClipboardLaunchPath() {
           std::string::npos);
 }
 
+// ---------------------------------------------------------------- 个性化配置
+
+// 全部新字段设成非默认值后 ToJson→Parse→FromJson 往返，逐一核对。
+void TestPersonalizationRoundTrip() {
+    RuleConfig cfg;
+    cfg.theme = 2;
+    cfg.accent = "#FF6A3D";
+    cfg.ui_scale = 120;
+    cfg.font_offset = 3;
+    cfg.corner_radius = 20;
+    cfg.top_offset = 32;
+    cfg.auto_hide_focus = true;
+    cfg.auto_hide_paused = true;
+    cfg.auto_hide_fullscreen = false;
+    cfg.quiet_form = 2;
+    cfg.yield_enabled = false;
+    cfg.yield_key = 2;
+    cfg.reduce_motion = true;
+    cfg.low_power_downgrade = false;
+    cfg.glass_quality = 3;
+    cfg.capture_refresh_ms = 5000;
+    cfg.target_monitor = 2;
+    cfg.monitor_index = 3;
+    // 预设名刻意带引号与反斜杠：ToJson 若忘了 json::Quote，
+    // 这里产出的就是非法 JSON，Parse 失败会整份回退默认。
+    cfg.preset_name = R"(夜班 "安静" \ 预设)";
+
+    const std::string text = cfg.ToJson();
+    json::Value root;
+    CHECK(json::Parse(text, root, nullptr));  // 输出必须是合法 JSON
+    const RuleConfig back = RuleConfig::FromJson(root);
+    CHECK(back.theme == 2);
+    CHECK(back.accent == cfg.accent);
+    CHECK(back.ui_scale == 120);
+    CHECK(back.font_offset == 3);
+    CHECK(back.corner_radius == 20);
+    CHECK(back.top_offset == 32);
+    CHECK(back.auto_hide_focus == true);
+    CHECK(back.auto_hide_paused == true);
+    CHECK(back.auto_hide_fullscreen == false);
+    CHECK(back.quiet_form == 2);
+    CHECK(back.yield_enabled == false);
+    CHECK(back.yield_key == 2);
+    CHECK(back.reduce_motion == true);
+    CHECK(back.low_power_downgrade == false);
+    CHECK(back.glass_quality == 3);
+    CHECK(back.capture_refresh_ms == 5000);
+    CHECK(back.target_monitor == 2);
+    CHECK(back.monitor_index == 3);
+    CHECK(back.preset_name == cfg.preset_name);
+
+    // 强调色也是字符串字段，同样必须经 Quote 转义后才能往返。
+    cfg.accent = "bad\"\\color";
+    json::Value root2;
+    CHECK(json::Parse(cfg.ToJson(), root2, nullptr));
+    CHECK(RuleConfig::FromJson(root2).accent == cfg.accent);
+}
+
+// 老 rules.json 没有任何新键：每个新字段都必须等于默认值，
+// 且原有字段仍按旧值加载（不能整份回退）。
+void TestPersonalizationLegacyDefaults() {
+    json::Value legacy;
+    CHECK(json::Parse(R"({"version":1,"fullscreen_hold":false,"glass":false})", legacy, nullptr));
+    const RuleConfig c = RuleConfig::FromJson(legacy);
+    CHECK(c.fullscreen_hold == false);  // 旧字段生效
+    CHECK(c.glass == false);
+    CHECK(c.theme == 0);
+    CHECK(c.accent == "#1E8AFA");
+    CHECK(c.ui_scale == 100);
+    CHECK(c.font_offset == 0);
+    CHECK(c.corner_radius == 0);
+    CHECK(c.top_offset == 4);
+    CHECK(c.auto_hide_focus == false);
+    CHECK(c.auto_hide_paused == false);
+    CHECK(c.auto_hide_fullscreen == true);
+    CHECK(c.quiet_form == 0);
+    CHECK(c.yield_enabled == true);
+    CHECK(c.yield_key == 0);
+    CHECK(c.reduce_motion == false);
+    CHECK(c.low_power_downgrade == true);
+    CHECK(c.glass_quality == 1);
+    CHECK(c.capture_refresh_ms == 2000);
+    CHECK(c.target_monitor == 0);
+    CHECK(c.monitor_index == 0);
+    CHECK(c.preset_name == "默认");
+}
+
+// 越界值一律 clamp 到合法区间，而不是让整块外观回退默认。
+void TestPersonalizationClamp() {
+    json::Value hi;
+    CHECK(json::Parse(R"({
+        "ui_scale":999, "font_offset":99, "corner_radius":5, "top_offset":-5,
+        "theme":9, "quiet_form":-3, "yield_key":42, "glass_quality":99,
+        "capture_refresh_ms":1, "target_monitor":7, "monitor_index":999
+    })", hi, nullptr));
+    const RuleConfig c = RuleConfig::FromJson(hi);
+    CHECK(c.ui_scale == 140);
+    CHECK(c.font_offset == 4);
+    CHECK(c.corner_radius == 0);  // 5 不在 {0}∪[8,40] → 归 0
+    CHECK(c.top_offset == 0);
+    CHECK(c.theme == 2);
+    CHECK(c.quiet_form == 0);
+    CHECK(c.yield_key == 2);
+    CHECK(c.glass_quality == 3);
+    CHECK(c.capture_refresh_ms == 500);
+    CHECK(c.target_monitor == 2);
+    CHECK(c.monitor_index == 15);
+
+    json::Value lo;
+    CHECK(json::Parse(R"({
+        "ui_scale":1, "font_offset":-99, "corner_radius":999, "top_offset":999,
+        "theme":-9, "quiet_form":99, "yield_key":-9, "glass_quality":-9,
+        "capture_refresh_ms":99999, "target_monitor":-9, "monitor_index":-9
+    })", lo, nullptr));
+    const RuleConfig d = RuleConfig::FromJson(lo);
+    CHECK(d.ui_scale == 80);
+    CHECK(d.font_offset == -2);
+    CHECK(d.corner_radius == 40);  // 999 夹到上界 40
+    CHECK(d.top_offset == 64);
+    CHECK(d.theme == 0);
+    CHECK(d.quiet_form == 2);
+    CHECK(d.yield_key == 0);
+    CHECK(d.glass_quality == 0);
+    CHECK(d.capture_refresh_ms == 8000);
+    CHECK(d.target_monitor == 0);
+    CHECK(d.monitor_index == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -577,6 +705,9 @@ int main() {
     TestExtensionAndClock();
     TestSecrets();
     TestConfigRoundTrip();
+    TestPersonalizationRoundTrip();
+    TestPersonalizationLegacyDefaults();
+    TestPersonalizationClamp();
     TestEventToggles();
     TestAppRules();
     TestExtRules();

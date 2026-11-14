@@ -49,6 +49,43 @@ public:
     //   occlude_x/y/w/h：胶囊窗口在「本截图坐标系」里的矩形（会被截进画面的部分）。
     //   epoch：同几何尺寸的干净捕获；非空时用它的像素修补 occlude 矩形。
     // 返回 false 表示截屏失败（无桌面会话 / 锁屏等），调用方应回落到不透明样式。
+    // 后台抓屏线程产出的**纯数据快照**：只有像素数组与尺寸，不含任何 GDI+ 对象，
+    // 因此可以安全跨线程传递，由主线程再包装成纹理。
+    // 这是根治卡顿的关键 —— 抓屏 + 降采样 + 3 趟模糊全部在后台线程完成，
+    // 主线程每帧只做一次指针/向量交换，不再被 30~100ms 的 BitBlt 阻塞。
+    struct Snapshot {
+        std::vector<std::uint8_t> small_px;  // 均衡档：重模糊 + 去饱和
+        std::vector<std::uint8_t> lite_px;   // 液态玻璃档：轻模糊 + 保色
+        int small_w = 0, small_h = 0;
+        int full_w = 0, full_h = 0;
+        int x = 0, y = 0;
+        double raw_lum = 0.0, blur_lum = 0.0;
+        double cost_ms = 0.0;
+        bool ok = false;
+    };
+
+    // 把当前已算好的纹理导出成可跨线程传递的数据（只在后台线程调用）。
+    void ExportSnapshot(Snapshot* out) const {
+        out->small_px = small_.px;
+        out->lite_px = lite_.px;
+        out->small_w = small_.w;
+        out->small_h = small_.h;
+        out->full_w = full_.w;
+        out->full_h = full_.h;
+        out->x = x_;
+        out->y = y_;
+        out->raw_lum = MeanLuminanceRaw();
+        out->blur_lum = MeanLuminance();
+    }
+
+    // 保存一次「干净背景」作为修补源（epoch）。只拷原始像素，不碰纹理与位图。
+    void AdoptClean(const Backdrop& src) {
+        full_ = src.full_;
+        x_ = src.x_;
+        y_ = src.y_;
+        valid_ = true;
+    }
+
     // 轻量内容探测：只把目标区域缩成 32×8 的小图算指纹，不做全尺寸拷贝。
     // 静止桌面时跳过每 2 秒一次的 2.3M 像素 BitBlt + 降采样 + 3 趟模糊
     //（issue #1 报告里「桌面几乎没变却反复全屏抓屏」那条）。

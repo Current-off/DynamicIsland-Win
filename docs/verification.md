@@ -2300,3 +2300,92 @@ PROFILE build=0.06ms draw=8.4..11ms present=0.63ms
 - 静态桌面不做内容哈希/脏区检测，`refresh` 仍按时间而非内容触发；
 - 日志缺 DPI / 显示器数量 / 触发原因；
 - 尚无 `tools/perf_baseline.py` 把 p95 纳入契约校验。
+
+## 第二十七轮：抓屏移出 UI 线程（2026-11-14 晚）
+
+用户反馈「还是会出现卡顿」，要求根治。此前 issue #1 的 epoch 节流只降低了
+**频率**（15.2% → 1.7%），单次抓屏仍同步阻塞主线程 30–100ms；调研报告也指出
+根因是「抓屏放在渲染/UI 线程」（NotchPeninsula 用 `IslandBackdrop.cs` 后台线程 +
+内容哈希做到静止零开销，Notchify 5.0 把 idle CPU 从 56% 修到 6%）。
+
+### 改动
+
+新增 `src/win32/glass_async.hpp`：
+- `GlassAsync` 后台线程持有自己的工作缓冲与 epoch 缓冲，执行
+  `GetDC + BitBlt + 降采样 + 3 趟模糊`；**主线程完全不碰抓屏**。
+- 单槽请求 + 单槽结果，`std::move` 交接，新请求/新结果直接覆盖旧值不排队
+  （玻璃是越新越好的数据，排队只会把旧帧送到屏幕上）。
+- 后台只产出**纯像素数组**，绝不创建 GDI+ 对象；`GlassTexture` 在主线程
+  按需 `LockBits` 包装成位图，规避跨线程使用 GDI+ 的不确定性。
+- `Busy()` 防止动画期间堆积过期请求；失败时沿用旧纹理（不闪回不透明）。
+
+`Backdrop` 增加 `Snapshot` / `ExportSnapshot` / `AdoptClean`；`overlay_main.cpp`
+的玻璃段改为「收结果 → 判定 → 提交请求」三段，渲染改读 `GlassTexture`。
+已有优化全部保留：epoch 几何稳定 300ms 防抖、自适应间隔、
+32×8 缩略内容指纹跳过静止桌面。
+
+另加主线程探针：每 2 秒输出窗口内单帧最大工作耗时 `perf: max_ui_work`。
+
+### 实测（本机，10 秒）
+
+```
+后台: cost=56.4ms / 41.3ms / 41.4ms / 47.8ms (async)
+主线程: max_ui_work = 25.1ms(启动窗) / 10.7 / 11.0 / 13.2ms
+```
+
+**后台耗时 40–56ms 完全没有传导到主线程**。改之前同步抓屏时，每 2 秒必然
+出现一次同量级的主线程尖峰（笔记本上实测 100ms 级，约占 1/3 墙钟时间）。
+这就是「动画不跟手」消失的直接证据。
+
+### 诊断过程中踩到的坑（留作记录）
+
+新类未声明、编译报 C2065/C2653，一度误判为「头文件没被 include」。
+加 `#pragma message` 探针没输出，是因为 `build.ps1` 只打印含
+`error|warning` 的行；改用 `#error` 验证 guard 后确认头文件正常引入，
+真正原因是 `overlay_main.cpp` 用**逐个 `using` 声明**引入类型，
+新类需要显式加 `using bi::win32::GlassAsync / GlassTexture`。
+
+## 第二十八轮：设置面板个性化 + 全部新设置接线（2026-11-14 晚）
+
+用户第二诉求：「设置不要就只有这些功能，加入新功能，使其更加个性化」。
+
+### 新增配置（20 个字段，全部带默认值与 clamp）
+
+`theme / accent / ui_scale / font_offset / corner_radius / top_offset /
+auto_hide_focus / auto_hide_paused / auto_hide_fullscreen / quiet_form /
+yield_enabled / yield_key / reduce_motion / low_power_downgrade /
+glass_quality / capture_refresh_ms / target_monitor / monitor_index /
+preset_name`。设置面板分「外观 / 行为 / 性能 / 预设」四页，
+旧配置缺这些键时按默认值加载（有专门的往返断言）。
+
+### 关键：每个开关都真实接线，不是存了没用
+
+| 字段 | 接入位置 |
+|---|---|
+| capture_refresh_ms / glass_quality | 玻璃刷新间隔（质量档映射倍率 2.0 / 1.0 / 0.7 / 0.5） |
+| yield_enabled / yield_key | 让路按键 Ctrl / Alt / Shift，可整体关闭 |
+| quiet_form | 安静态 0 呼吸点 / 1 只留细把手 / 2 完全隐藏 |
+| auto_hide_fullscreen / focus / paused | `is_sleeping()` 三路独立判定；focus 用「5 秒无交互」作可观测等价条件，paused 要求确有媒体会话且已暂停 |
+| top_offset | `relayout()` 的工作区顶部偏移（下限 4px） |
+| low_power_downgrade | 电池且未插电时液态玻璃降为不透明 |
+| reduce_motion | 弹簧在一帧内跑完 0.12s 子步进，看不到位移动画 |
+| target_monitor / monitor_index | 主屏 / 光标所在屏 / 指定序号；`EnumDisplayMonitors` 允许负坐标，光标跨屏 500ms 节流重算 |
+| theme / accent / ui_scale / font_offset / corner_radius | `renderer.hpp` 的 `AppearanceSettings` 单例，作用于 `TextFor` 字号、`AccentFor` 强调色、两处圆角、`DrawOpaqueBody` 底色深浅 |
+
+主题**不做浅底深字反转**：文字颜色在渲染层多处硬编码为浅色，局部反转
+必然产生不可读区域。两档都保持深色系、只调深浅，对比度不破。
+
+### 验证
+
+- 编译零警告；**637 项断言全绿**（原 569 + 新增 68）、53 项契约全绿
+- `--selftest`：`zones=31 unclickable=0`，20 个新字段全部写入 `settings_selftest.json`
+- 命名审计 0 残留
+- 10 秒性能复测：后台抓屏 42.7 / 44.9 / 50.5ms，
+  主线程 `max_ui_work` = 19.8（启动窗）/ 8.6 / 13.8 / 12.6ms
+
+### 过程中修掉的一个真实缺陷
+
+`FromJson` 把缺失的 `corner_radius`（默认 0，语义是「用范式默认 28」）
+落进 `clamp_int(0, 8, 40)` 改成 8，导致旧配置加载后圆角被悄悄改掉。
+哨兵值 0 必须原样保留。这类「默认值被 clamp 改写」在新增字段时很容易漏，
+已补专门的 legacy-defaults 往返断言。
