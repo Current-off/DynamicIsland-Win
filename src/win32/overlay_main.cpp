@@ -26,6 +26,9 @@
 #include <windows.h>
 #include <dbt.h>
 #include <shellapi.h>
+// timeBeginPeriod / timeEndPeriod（1ms 定时器精度）。WIN32_LEAN_AND_MEAN 把
+// mmsystem.h 挡掉了，这里单独要 timeapi.h，不引入整个多媒体头。
+#include <timeapi.h>
 // 只用到 MINIDUMP_TYPE 等类型定义；MiniDumpWriteDump 走 GetProcAddress 动态解析，
 // 因此不需要链接 dbghelp.lib（见 CrashFilter）。
 #include <dbghelp.h>
@@ -1698,6 +1701,13 @@ int Run() {
     };
 
     EnableDpiAwareness();
+    // 1ms 定时器精度。默认是 15.625ms：60fps 的帧预算是 16.7ms，睡眠会被量化成
+    // 15.6 或 31.2ms —— 弹簧动画本来该匀速推进，实际一帧 15ms 一帧 31ms，
+    // 看上去就是「一顿一顿」。这不是渲染慢，是**排帧被计时器精度卡住**。
+    // 代价：本进程存活期间系统定时器分辨率提高，略微增加待机功耗；
+    // 退出时必须成对调用 timeEndPeriod，否则会影响别的进程。
+    const bool timer_precise = (::timeBeginPeriod(1) == TIMERR_NOERROR);
+    note(std::string("timer: 1ms precision ") + (timer_precise ? "on" : "FAILED (frames will jitter)"));
     GdiPlusSession gdiplus;
 
     // ---- 规则：先落地配置文件，再读进内存。放在最前面，设置窗口也要用。----
@@ -1898,7 +1908,7 @@ int Run() {
     auto set_quality = [](Gdiplus::Graphics& g) {
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
-        g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        g.SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
         g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
     };
@@ -2016,6 +2026,15 @@ int Run() {
     GlassTexture glass_tex;
     Backdrop glass_probe;      // 只在主线程做 32×8 缩略内容探测，不抓全屏
     bool glass_ready = false;  // 是否已有可用纹理
+    int last_body_mode = -1;   // 上一帧的身体形态（0 不透明 / 1 磨砂 / 2 液态），用于诊断变色
+    // 帧耗时要分段看：画一帧和把它推上屏幕是两件事，UpdateLayeredWindow 会等
+    // 合成器，混在一起就分不清「画得慢」还是「提交得慢」。
+    double max_draw_ms = 0.0;
+    double max_present_ms = 0.0;
+    double max_chrome_ms = 0.0;   // 只画铬层（玻璃/边/阴影）
+    double max_content_ms = 0.0;  // 只画内容（文字/图标/进度）
+    double max_pixels_ms = 0.0;   // 铬层像素的拷入/拷出
+    int chrome_miss_window = 0;   // 本窗口内铬层缓存未命中的次数（= 整块重绘了多少帧）
     std::int64_t glass_last_ms = -100000;
     // 后台最近一次「抓屏 + 缩放 + 模糊」的耗时（现在**不阻塞主线程**）。
     // 仍写进日志，也用来把刷新间隔往后推 —— 笔记本上单次可能上百毫秒，
@@ -3320,6 +3339,25 @@ int Run() {
             }
 
             {
+                // 诊断：这一帧的「身体」到底画成了什么。
+                // 玻璃一旦掉回不透明，岛会突然变黑再变回来 —— 肉眼只能看到结果，
+                // 分不清是「纹理没就绪」「纹理为空」还是「用户把玻璃关了」。
+                // 只在切换时记一行，稳态下不产生任何输出。
+                int body = 0;  // 0 不透明 / 1 磨砂 / 2 液态
+                if (glass.backdrop != nullptr) body = (drawn.opacity_mode == 0) ? 2 : 1;
+                if (body != last_body_mode) {
+                    note("body: " + std::to_string(body) + " (opacity=" +
+                         std::to_string(drawn.opacity_mode) + " glass_ready=" +
+                         std::to_string(glass_ready ? 1 : 0) + " backdrop=" +
+                         std::to_string(glass.backdrop != nullptr ? 1 : 0) + " expand=" +
+                         std::to_string(drawn.expanded ? 1 : 0) + " sleepbar=" +
+                         std::to_string(drawn.sleep_bar ? 1 : 0) + ")");
+                    last_body_mode = body;
+                }
+            }
+
+            const auto t_draw0 = Clock::now();
+            {
                 // 铬层：命中缓存就把像素抹回来，只重画会变的内容。
                 // 两段各用一个 Graphics 作用域，是为了让 GDI+ 在切换前把绘制刷进 DIB
                 // —— 否则存下来的"铬层像素"可能还缺最后一笔。
@@ -3329,25 +3367,43 @@ int Run() {
                 ++chrome_calls;
                 if (hit) {
                     ++chrome_hits;
+                    const auto t0 = Clock::now();
                     surface.LoadPixels(chrome_cache);
+                    max_pixels_ms = (std::max)(max_pixels_ms,
+                                               std::chrono::duration<double>(Clock::now() - t0).count() * 1000.0);
                 } else {
+                    ++chrome_miss_window;
                     {
+                        const auto t0 = Clock::now();
                         Gdiplus::Graphics g(surface.Dc());
                         set_quality(g);
                         renderer.Draw(g, drawn, static_cast<float>(scale), glass,
                                       CapsuleRenderer::Phase::Chrome);
+                        max_chrome_ms = (std::max)(
+                            max_chrome_ms,
+                            std::chrono::duration<double>(Clock::now() - t0).count() * 1000.0);
                     }
+                    const auto t1 = Clock::now();
                     surface.SavePixels(chrome_cache);
+                    max_pixels_ms = (std::max)(max_pixels_ms,
+                                               std::chrono::duration<double>(Clock::now() - t1).count() * 1000.0);
                     chrome_key_cached = key;
                 }
                 {
+                    const auto t0 = Clock::now();
                     Gdiplus::Graphics g(surface.Dc());
                     set_quality(g);
                     renderer.Draw(g, drawn, static_cast<float>(scale), glass,
                                   CapsuleRenderer::Phase::Content);
+                    max_content_ms = (std::max)(
+                        max_content_ms,
+                        std::chrono::duration<double>(Clock::now() - t0).count() * 1000.0);
                 }
             }
 
+            const auto t_draw1 = Clock::now();
+            max_draw_ms = (std::max)(max_draw_ms,
+                                     std::chrono::duration<double>(t_draw1 - t_draw0).count() * 1000.0);
             if (!opt.snapshot_path.empty() && !snapshot_taken && opt.snapshot_at_ms >= 0 &&
                 now_ms >= opt.snapshot_at_ms) {
                 try {
@@ -3366,7 +3422,11 @@ int Run() {
                 view.sleep_bar
                     ? monitor.rcWork.top - static_cast<int>(std::lround(Layout::kMargin * scale))
                     : screen_top;
+            const auto t_present0 = Clock::now();
             present(anchor_x(canvas_w), present_y, 255);
+            max_present_ms = (std::max)(
+                max_present_ms,
+                std::chrono::duration<double>(Clock::now() - t_present0).count() * 1000.0);
 
             // 桌面实证：从屏幕 DC 抓回「胶囊 + 背景」的实际合成结果。
             // 这一步抓的是显示器内容，不是自己的绘制缓冲，因此能证明窗口真的在桌面上。
@@ -3441,10 +3501,25 @@ int Run() {
         max_ui_work_ms = std::max(max_ui_work_ms, used * 1000.0);
         if (now_ms - perf_window_ms >= 2000) {
             char pline[160];
-            std::snprintf(pline, sizeof(pline), "perf: max_ui_work=%.1fms (2s window)",
-                          max_ui_work_ms);
+            std::snprintf(pline, sizeof(pline),
+                          "perf[t=+%.1fs]: ui=%.1f draw=%.1f [chrome=%.1f content=%.1f px=%.1f] "
+                          "present=%.1f ms (2s) shadow=%.0f body=%.0f "
+                          "[glass=%.0f bd=%.0f rim=%.0f inner=%.0f] miss=%d/%llu",
+                          elapsed, max_ui_work_ms, max_draw_ms, max_chrome_ms, max_content_ms,
+                          max_pixels_ms, max_present_ms, renderer.last_shadow_ms,
+                          renderer.last_body_ms, renderer.last_glassbody_ms,
+                          renderer.last_backdrop_ms, renderer.last_rim_ms,
+                          renderer.last_innerrim_ms, chrome_miss_window,
+                          static_cast<unsigned long long>(chrome_calls));
             note(pline);
             max_ui_work_ms = 0.0;
+            max_draw_ms = 0.0;
+            max_present_ms = 0.0;
+            max_chrome_ms = 0.0;
+            max_content_ms = 0.0;
+            max_pixels_ms = 0.0;
+            chrome_miss_window = 0;
+            chrome_calls = 0;
             perf_window_ms = now_ms;
         }
         if (used < frame_budget) {
@@ -3474,6 +3549,8 @@ int Run() {
     ipc.Stop();
     note("ipc: accepted " + std::to_string(ipc.Accepted()) + ", rejected " +
          std::to_string(ipc.Rejected()));
+
+    if (timer_precise) ::timeEndPeriod(1);
 
     note("clean exit at t=+" +
          std::to_string(std::chrono::duration<double>(Clock::now() - start).count()).substr(0, 5) +

@@ -446,6 +446,15 @@ public:
     // 一处漏掉就会在那块文字上"糊"掉，而这种漏很难靠肉眼发现。
     void SetTextShadow(bool on) { text_shadow_ = on; }
 
+    // 上一帧 Chrome 阶段的两段耗时（毫秒，粗糙度 1ms）。只用于诊断，
+    // 不参与任何渲染决策。
+    double last_shadow_ms = 0.0;
+    double last_body_ms = 0.0;
+    double last_glassbody_ms = 0.0;   // 玻璃本体（背景纹理 + 染色 + 受光）
+    double last_backdrop_ms = 0.0;    // 其中的背景纹理那一笔
+    double last_rim_ms = 0.0;         // 外描边
+    double last_innerrim_ms = 0.0;    // 内描边
+
     // 绘制分两个可独立调用的阶段：铬层（底/受光/描边/投影）与内容（图标/文字/律动/角标）。
     // 拆开是为了让上层能缓存铬层 —— 实测它占单帧绘制成本的 63%（8.4ms 里的 5.3ms），
     // 而在尺寸、透明度、材质、玻璃纪元都不变时，这一段逐帧完全一致。
@@ -515,6 +524,9 @@ public:
             // 投影先画，且和胶囊一起投 —— 否则分离小胶囊会像贴在玻璃上的贴纸。
             // 休眠扁条刻意不投：一条 26px 的待机条再拖个影子，反而更显眼、更挡东西。
             if (phase != Phase::Content) {
+                // 分两段记账：投影和本体都是「重绘一次几十毫秒」的嫌疑犯，
+                // 混在一起就只会看到 chrome=38ms 而不知道该砍哪个。
+                const ULONGLONG t_shadow = ::GetTickCount64();
                 if (!v.sleep_bar) {
                     // 液态玻璃也要投影：没有影子的透明块像直接印在壁纸上，浮不起来。
                     // 但要比实心款淡得多（55%），否则在亮壁纸上会拖出一团灰雾。
@@ -522,9 +534,13 @@ public:
                     DropShadow(g, pill, sh, scale);
                     for (const auto& box : dboxes) DropShadow(g, box, sh, scale);
                 }
+                const ULONGLONG t_body = ::GetTickCount64();
 
                 DrawPill(g, pill, a, scale, v.sleep_bar ? GlassParams{} : glass, v.opacity_mode);
                 for (const auto& box : dboxes) DrawPill(g, box, a, scale, glass, v.opacity_mode);
+                const ULONGLONG t_end = ::GetTickCount64();
+                last_shadow_ms = static_cast<double>(t_body - t_shadow);
+                last_body_ms = static_cast<double>(t_end - t_body);
             }
 
             if (phase != Phase::Chrome && !v.alive_dot) {
@@ -661,25 +677,42 @@ private:
         const int pad = radius_px * 2 + drop_px + 2;
         const int pw = static_cast<int>(std::lround(r.Width));
         const int ph = static_cast<int>(std::lround(r.Height));
-        const int bw = pw + pad * 2;
-        const int bh = ph + pad * 2;
+        // 剪影按 96px 档位构建，贴图时缩放到真实尺寸。
+        //
+        // 为什么不是每帧按真实尺寸构建：展开/收起动画里宽度每帧都在变，
+        // 缓存必然不命中，而一次 3 趟盒模糊在 900×300 上实测 **16ms** ——
+        // 于是动画每帧 18ms，怎么都到不了 60fps。
+        // 阴影是一团模糊，缩放 0.7~1.0 倍肉眼看不出差别；按档位复用后，
+        // 一次动画只重建 2~3 次，其余帧退化成一次贴图。
+        const int qw = ((pw + 95) / 96) * 96;
+        const int qh = ((ph + 95) / 96) * 96;
+        const int bw = qw + pad * 2;
+        const int bh = qh + pad * 2;
         // 4 个 16 位字段拼键：不重叠、不靠异或，尺寸越界时直接绕过缓存。
-        if (bw <= 0 || bh <= 0 || bw > 0xFFFF || bh > 0xFFFF || pw > 0xFFFF || ph > 0xFFFF) return;
+        if (bw <= 0 || bh <= 0 || bw > 0xFFFF || bh > 0xFFFF || qw > 0xFFFF || qh > 0xFFFF) return;
+        // alpha 只取 8 档：淡入 150ms 里逐档变化，档内复用同一张剪影。
+        const int alpha_step = (alpha * 7 + 127) / 255;
         const std::uint64_t key = static_cast<std::uint64_t>(bw) |
                                   (static_cast<std::uint64_t>(bh) << 16) |
-                                  (static_cast<std::uint64_t>(pw) << 32) |
-                                  (static_cast<std::uint64_t>(ph) << 48);
-        Gdiplus::Bitmap* silhouette = ShadowFor(key, bw, bh, pw, ph, radius_px);
+                                  (static_cast<std::uint64_t>(qw) << 32) |
+                                  (static_cast<std::uint64_t>(qh) << 48) ^
+                                  (static_cast<std::uint64_t>(alpha_step) << 8);
+        Gdiplus::Bitmap* silhouette = ShadowFor(key, bw, bh, qw, qh, radius_px, alpha);
         if (silhouette == nullptr) return;
+        // 缩放贴到真实尺寸：档位只比真实尺寸大一点，缩放比接近 1。
+        // 这里必须传 255：不透明度已经烘进剪影了，再传 view alpha 会让
+        // DrawShadowAlpha 掉进 ColorMatrix 逐像素分支（正是刚拆掉的那条慢路径）。
         DrawShadowAlpha(g, *silhouette,
                         Gdiplus::RectF(r.X - pad, r.Y - pad + drop_px,
-                                       static_cast<float>(bw), static_cast<float>(bh)),
-                        alpha);
+                                       static_cast<float>(pw + pad * 2),
+                                       static_cast<float>(ph + pad * 2)),
+                        255);
     }
 
     // 取（或生成）一枚已模糊的黑色剪影，容量 kShadowSlots，MRU 排序。
     // 一帧最多同时用到 3 种尺寸（主胶囊 + 两个分离小圆），留一格余量做抖动。
-    Gdiplus::Bitmap* ShadowFor(std::uint64_t key, int bw, int bh, int pw, int ph, int radius_px) {
+    Gdiplus::Bitmap* ShadowFor(std::uint64_t key, int bw, int bh, int pw, int ph, int radius_px,
+                               BYTE alpha) {
         for (std::size_t i = 0; i < shadow_slots_.size(); ++i) {
             if (shadow_slots_[i].key == key) {
                 if (i != 0) {
@@ -700,7 +733,14 @@ private:
             // DrawImage 贴图（快路径），只有淡入淡出时才需要 ColorMatrix 缩放。
             // 若是填 255、每帧都乘 0.22，ColorMatrix 会让每一张投影都掉进
             // 逐像素合成路径，一览模式 4 个岛量出来反而比旧版更慢。
-            FillRounded(g, rect, ph * 0.5f, Gdiplus::Color(kShadowBakedAlpha, 0, 0, 0));
+            // 把「淡入淡出的当前不透明度」直接烘进剪影，而不是贴图时用
+            // ColorMatrix 逐像素乘。后者在 900×300 的剪影上实测 20~30ms/帧，
+            // 而展开动画的前 150ms 每帧都落在那个分支里 —— 这就是「动画一开
+            // 头就卡」的真正原因。烘进去以后贴图永远走 DrawImage 快路径。
+            const int baked = static_cast<int>(
+                std::lround(static_cast<double>(kShadowBakedAlpha) *
+                            static_cast<double>(alpha) / 255.0));
+            FillRounded(g, rect, ph * 0.5f, Gdiplus::Color(Clamp8(baked), 0, 0, 0));
         }
         Gdiplus::BitmapData data;
         const Gdiplus::Rect lock(0, 0, bw, bh);
@@ -822,7 +862,7 @@ private:
     // 用 readback 探针能逐像素核对，不再依赖对混合公式的猜测。
     // 玻璃路径（DrawGlassBody）不受此约束：它叠在"染色后的模糊背景"上，
     // 底色是中间调，gamma 混合的偏差肉眼不可辨。
-    static void DrawPill(Gdiplus::Graphics& g, const Gdiplus::RectF& r, BYTE alpha, float scale,
+    void DrawPill(Gdiplus::Graphics& g, const Gdiplus::RectF& r, BYTE alpha, float scale,
                          const GlassParams& glass, int mode = 1) {
         // 圆角必须封顶。原先直接取 Height * 0.5：矮胶囊（46）是药丸没问题，
         // 但展开态涨到 196 后半径变成 98 —— 两端成了半圆，而封面、时间、
@@ -846,10 +886,17 @@ private:
             return;
         }
         const bool use_glass = mode != 2 && glass.backdrop != nullptr;
+        const ULONGLONG t0 = ::GetTickCount64();
         if (use_glass) {
             DrawGlassBody(g, path, r, alpha, glass);
+            const ULONGLONG t1 = ::GetTickCount64();
             DrawRim(g, path, r, alpha, scale, true, radius);
+            const ULONGLONG t2 = ::GetTickCount64();
             DrawInnerRim(g, r, radius, alpha, scale, true);
+            const ULONGLONG t3 = ::GetTickCount64();
+            last_glassbody_ms = static_cast<double>(t1 - t0);
+            last_rim_ms = static_cast<double>(t2 - t1);
+            last_innerrim_ms = static_cast<double>(t3 - t2);
         } else {
             DrawOpaqueBody(g, path, r, alpha);
             DrawRim(g, path, r, alpha, scale, false, radius);
@@ -874,12 +921,7 @@ private:
         g.SetClip(&path);
 
         // 1) 背景纹理：和均衡档同一套对齐方式（按 offset 平移 + 全尺寸放大）。
-        if (glass.backdrop != nullptr && glass.full_w > 0.0f && glass.full_h > 0.0f) {
-            g.DrawImage(glass.backdrop,
-                        Gdiplus::RectF(glass.offset_x, glass.offset_y, glass.full_w, glass.full_h), 0,
-                        0, static_cast<float>(glass.backdrop->GetWidth()),
-                        static_cast<float>(glass.backdrop->GetHeight()), Gdiplus::UnitPixel);
-        }
+        DrawBackdropClipped(g, glass, r);
 
         // 2) 极轻的冷色染色。
         //    这里踩过一次大坑：0.32 的中性深色在浅米色壁纸上会得到一片**均匀的灰**
@@ -1044,22 +1086,49 @@ private:
         g.FillPath(&glow, &path);
     }
 
+    // 把「整屏大小的玻璃纹理」只画出真正可见的那一块。
+    //
+    // 原来是把 3832×608 的纹理整张画一遍、靠裁剪区收边。裁剪区**不省算力**：
+    // GDI+ 仍按整个目标矩形做双三次插值，4K/200% 下单这一笔就 25ms 以上
+    // （实测 draw=28ms 而 present 只有 2.5ms，卡顿全在这里）。
+    // 只有把目标矩形缩到可见区域才省 —— 同时把插值降到双线性：
+    // 纹理本身已经是模糊的，双三次多出来的那点锐度看不出来，成本却高一个量级。
+    static void DrawBackdropClipped(Gdiplus::Graphics& g, const GlassParams& glass,
+                                    const Gdiplus::RectF& clip) {
+        if (glass.backdrop == nullptr || glass.full_w <= 0.0f || glass.full_h <= 0.0f) return;
+        const Gdiplus::RectF dst(glass.offset_x, glass.offset_y, glass.full_w, glass.full_h);
+        const float x0 = (std::max)(dst.X, clip.X);
+        const float y0 = (std::max)(dst.Y, clip.Y);
+        const float x1 = (std::min)(dst.GetRight(), clip.GetRight());
+        const float y1 = (std::min)(dst.GetBottom(), clip.GetBottom());
+        if (x1 <= x0 || y1 <= y0) return;
+        const float bw = static_cast<float>(glass.backdrop->GetWidth());
+        const float bh = static_cast<float>(glass.backdrop->GetHeight());
+        if (bw <= 0.0f || bh <= 0.0f) return;
+        const float sx = (x0 - dst.X) / dst.Width * bw;
+        const float sy = (y0 - dst.Y) / dst.Height * bh;
+        const float sw = (x1 - x0) / dst.Width * bw;
+        const float sh = (y1 - y0) / dst.Height * bh;
+        const Gdiplus::GraphicsState state = g.Save();
+        g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+        g.DrawImage(glass.backdrop, Gdiplus::RectF(x0, y0, x1 - x0, y1 - y0), sx, sy, sw, sh,
+                    Gdiplus::UnitPixel);
+        g.Restore(state);
+    }
+
     // 玻璃底：模糊背景透出 + 深色染色 + 顶部镜面高光 + 底部内反射。
     // 配方接近 macOS 磨砂：背景只贡献色相与大块明暗（60% 染色压暗），
     // 文字可读性靠染色，玻璃感靠高光与反光的两道亮边。
-    static void DrawGlassBody(Gdiplus::Graphics& g, const Gdiplus::GraphicsPath& path,
-                              const Gdiplus::RectF& r, BYTE alpha, const GlassParams& glass) {
+    void DrawGlassBody(Gdiplus::Graphics& g, const Gdiplus::GraphicsPath& path,
+                       const Gdiplus::RectF& r, BYTE alpha, const GlassParams& glass) {
         const Gdiplus::GraphicsState state = g.Save();
         g.SetClip(&path);
+        const ULONGLONG t_bd0 = ::GetTickCount64();
 
         // 1) 透出背景：纹理覆盖的是整个捕获矩形，必须按 offset 平移、按全尺寸
         //    放大对齐，否则胶囊里的"玻璃"和背后真实内容会错位，一看就是贴图。
-        if (glass.backdrop != nullptr && glass.full_w > 0.0f && glass.full_h > 0.0f) {
-            g.DrawImage(glass.backdrop,
-                        Gdiplus::RectF(glass.offset_x, glass.offset_y, glass.full_w, glass.full_h), 0,
-                        0, static_cast<float>(glass.backdrop->GetWidth()),
-                        static_cast<float>(glass.backdrop->GetHeight()), Gdiplus::UnitPixel);
-        }
+        DrawBackdropClipped(g, glass, r);
+        last_backdrop_ms = static_cast<double>(::GetTickCount64() - t_bd0);
 
         // 2) 染色：70% 深色。玻璃的可读性完全靠这一层 —— 60% 时在浅色桌面上
         //    内部会亮到 #AB（实测），白字压不住，看着像灰色塑料而不是玻璃。
@@ -2512,8 +2581,18 @@ private:
         DrawChip(g, v.kind, chip, chip_size, alpha, v.cover_path);
 
         const float text_x = chip.GetRight() + 14.0f * scale;
+        // 「来源 / 数量」这类短标签（微信、23%、3 项）在没有进度条的展开态里
+        // 不能放页脚：短面板只有 80 高，图标占 18..60，页脚那行落在 48..64 ——
+        // 正好压在图标下半截上（用户报的「图标和软件名字重叠」）。
+        // 改成右对齐到标题同一行，和紧凑态同一个规则：标题左、标签右。
+        const std::wstring meta = Widen(v.meta);
+        const float meta_w =
+            meta.empty() ? 0.0f : MeasureText(g, meta, 11.5f * scale, Gdiplus::FontStyleRegular);
+        const bool footer_row = v.progress >= 0.0;  // 有进度条才有页脚那一行
+        float text_right = hit.collapse.X - 8.0f * scale;
+        if (!footer_row && meta_w > 0.0f) text_right -= meta_w + 12.0f * scale;
         // 右上角关闭按钮会占掉一块，标题必须在此之前收尾，否则长歌名会压到 × 上。
-        const float text_w = std::max(20.0f, hit.collapse.X - 8.0f * scale - text_x);
+        const float text_w = std::max(20.0f, text_right - text_x);
 
         // 标题与副标题的相对位置锁定在图标上：图标顶对齐标题，图标底对齐副标题，
         // 这样即使只有一行副标题，三者也是一个视觉块，而不是三行各自浮着。
@@ -2639,12 +2718,23 @@ private:
         // 页脚只留「有信息量」的那一行（时间 / 进度）。原来右边还挂着一句
         // 「点标题打开应用 · 拖进度 · × 关闭」—— 那是零信息量的噪音：
         // × 就在右上角看得见，能拖的进度条本身也长得像能拖的。
-        DrawText(g, Widen(v.meta), Gdiplus::RectF(pill.X + pad, foot_y - 8.0f * scale,
-                                                  bar_w * 0.30f,
-                                                  16.0f * scale),
-                 11.0f * scale, Gdiplus::FontStyleRegular,
-                 Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.98f)),
-                                glassy ? 158 : 108, glassy ? 160 : 109, glassy ? 170 : 118));
+        // 没有进度条就没有这一行：短面板里它会压在图标上（见上面的注释），
+        // 那种情况下 meta 已经作为右对齐标签画在标题行了。
+        if (footer_row) {
+            DrawText(g, meta, Gdiplus::RectF(pill.X + pad, foot_y - 8.0f * scale,
+                                             bar_w * 0.30f, 16.0f * scale),
+                     11.0f * scale, Gdiplus::FontStyleRegular,
+                     Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.98f)),
+                                    glassy ? 158 : 108, glassy ? 160 : 109, glassy ? 170 : 118));
+        } else if (meta_w > 0.0f) {
+            DrawText(g, meta,
+                     Gdiplus::RectF(hit.collapse.X - 10.0f * scale - meta_w,
+                                    chip.Y - 1.0f * scale, meta_w, 22.0f * scale),
+                     11.5f * scale, Gdiplus::FontStyleRegular,
+                     Gdiplus::Color(Clamp8(static_cast<int>(alpha * 0.92f)),
+                                    glassy ? 186 : 142, glassy ? 188 : 143, glassy ? 198 : 152),
+                     Gdiplus::StringAlignmentFar);
+        }
 
         // ---- 右上角：收起（回到小岛）+ 关闭（dismiss 当前活动）----
         DrawHeaderButtons(g, hit, alpha, scale);

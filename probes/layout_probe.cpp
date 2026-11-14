@@ -11,6 +11,7 @@
 #include <objidl.h>
 #include <gdiplus.h>
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -147,6 +148,40 @@ int main(int argc, char** argv) {
         cases.push_back({"expanded_calendar", v});
     }
 
+    // ---- 短展开态（无进度条）：图标 42px 占 18..60，页脚那一行会不会压上去 ----
+    {
+        CapsuleView v = Base("clipboard", "已复制", "微信 · 这段话被复制了");
+        v.meta = "微信";
+        v.expanded = true;
+        v.content_w = Layout::kExpandedW;
+        v.content_h = Layout::kExpandedShortH;
+        cases.push_back({"expanded_clipboard", v});
+    }
+    {
+        CapsuleView v = Base("notification", "微信", "张三：晚上一起吃饭吗？");
+        v.meta = "微信";
+        v.expanded = true;
+        v.content_w = Layout::kExpandedW;
+        v.content_h = Layout::kExpandedShortH;
+        cases.push_back({"expanded_notification", v});
+    }
+    {
+        CapsuleView v = Base("power", "电量 23%", "建议插电");
+        v.meta = "23%";
+        v.expanded = true;
+        v.content_w = Layout::kExpandedW;
+        v.content_h = Layout::kExpandedShortH;
+        cases.push_back({"expanded_power_meta", v});
+    }
+    // ---- 紧凑态对照 ----
+    {
+        CapsuleView v = Base("clipboard", "已复制", "");
+        v.meta = "Microsoft Edge";
+        v.content_w = Layout::kCompactW;
+        v.content_h = Layout::kCompactH;
+        cases.push_back({"compact_clipboard", v});
+    }
+
     // ---- 其余可视状态 ----
     {
         CapsuleView v = Base("media", "", "");
@@ -163,6 +198,58 @@ int main(int argc, char** argv) {
         v.content_w = Layout::kSleepBarH;
         v.content_h = Layout::kSleepBarH;
         cases.push_back({"alive_dot", v});
+    }
+
+    // ---- 展开动画基准：宽度逐帧变化时，重绘一帧要多久 ----
+    //
+    // 这条基准存在的理由很具体：展开动画期间几何每帧都变，铬层缓存必然失效，
+    // 所以「动画卡不卡」= 「一次完整铬层重绘要多久」。桌面上的实测会被全屏判定、
+    // 活动是否存活等外部状态干扰，这里直接量渲染器本身。
+    if (argc > 1 && std::string(argv[1]) == "--bench") {
+        // 用媒体展开态做基准：几何最简单（图标 + 两行文字 + 进度条 + 走带），
+        // 但铬层路径与其它展开态完全一致（阴影 + 玻璃 + 内外描边）。
+        CapsuleView v = Base("media", "晴天", "周杰伦 · 叶惠美");
+        v.expanded = true;
+        v.playing = true;
+        v.progress = 0.42;
+        v.meta = "1:23 / 3:45";
+        v.content_h = Layout::kExpandedH;
+        Gdiplus::Bitmap surface(960, 640, PixelFormat32bppARGB);
+        CapsuleRenderer renderer;
+        double worst = 0.0;
+        double total = 0.0;
+        int frames = 0;
+        for (int i = 0; i <= 40; ++i) {
+            const float t = static_cast<float>(i) / 40.0f;
+            v.content_w = Layout::kCompactW + (Layout::kExpandedW - Layout::kCompactW) * t;
+            const auto t0 = std::chrono::steady_clock::now();
+            {
+                Gdiplus::Graphics g(&surface);
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+                g.SetCompositingQuality(Gdiplus::CompositingQualityHighSpeed);
+                g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);
+                g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+                renderer.Draw(g, v, 2.0f, GlassParams{}, CapsuleRenderer::Phase::Chrome);
+                renderer.Draw(g, v, 2.0f, GlassParams{}, CapsuleRenderer::Phase::Content);
+            }
+            const double ms =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() * 1000.0;
+            worst = std::max(worst, ms);
+            total += ms;
+            ++frames;
+        }
+        // 这里**不能**调 GdiplusShutdown：surface / renderer 持有 GDI+ 位图，
+        // 会在 return 时析构，而那一刻 GDI+ 已经关了 → 释放失效句柄 → 访问冲突
+        // （实测 0xC0000005，且 stdout 缓冲全丢，看起来像「程序什么都没输出」）。
+        // 进程退出的清理交给系统，比在这里手动排序安全。
+        std::printf("bench: frames=%d avg=%.2fms worst=%.2fms (no backdrop)\n", frames,
+                    total / frames, worst);
+        std::printf("       last frame: shadow=%.0fms body=%.0fms glass=%.0fms\n",
+                    renderer.last_shadow_ms, renderer.last_body_ms,
+                    renderer.last_glassbody_ms);
+        std::fflush(stdout);
+        return 0;
     }
 
     std::printf("%-24s %s\n", "case", "canvas");

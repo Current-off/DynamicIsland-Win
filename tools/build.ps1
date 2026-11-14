@@ -90,7 +90,7 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 $flags = @('-nologo', '-std:c++20', '-utf-8', '-EHsc', '-W4', '-DNOMINMAX',
            '-DUNICODE', '-D_UNICODE', '-Icontracts', '-Isrc/core')
 $guiLibs = @('user32.lib', 'gdi32.lib', 'gdiplus.lib', 'shlwapi.lib', 'shell32.lib',
-             'ole32.lib', 'windowsapp.lib', 'winhttp.lib')
+             'ole32.lib', 'windowsapp.lib', 'winhttp.lib', 'winmm.lib')
 
 # 顺序有意义：测试先编，编不过就不用再编探针了。
 $targets = @(
